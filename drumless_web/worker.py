@@ -154,48 +154,58 @@ def _onset_envelope(x):
     return np.maximum(env - np.convolve(env, np.ones(51) / 51, mode="same"), 0)
 
 
-def _fit_tempo(env, i0: int, i1: int) -> tuple[float, float]:
-    """(bpm, offset in seconds from the start of env) of the beat grid that best fits env[i0:i1]: tempo from the
-    autocorrelation (60-200 BPM, favouring the usual range around 120: the octave is ambiguous), then BPM and phase
-    refined by averaging the envelope at the beats of every candidate grid."""
+def _tempo(env) -> float:
+    """Rough tempo (BPM) of an onset envelope: autocorrelation over 60-200 BPM, favouring the usual range around 120
+    (the octave is ambiguous; the page has half/double buttons for when this picks the wrong one)."""
     import numpy as np
     fps = BEAT_RATE / BEAT_HOP
-    seg = env[i0:i1]
-    ac = np.correlate(seg, seg, mode="full")[len(seg) - 1:]
-    lags = np.arange(int(fps * 60 / 200), min(int(fps * 60 / 60), len(seg) - 1) + 1)
+    ac = np.correlate(env, env, mode="full")[len(env) - 1:]
+    lags = np.arange(int(fps * 60 / 200), min(int(fps * 60 / 60), len(env) - 1) + 1)
     bpms = 60 * fps / lags
-    bpm0 = float(bpms[int(np.argmax(ac[lags] * np.exp(-0.5 * (np.log2(bpms / 120) / 0.8) ** 2)))])
-    smooth = np.convolve(env, np.hanning(5) / np.hanning(5).sum(), mode="same")
-    t0, t1 = i0 / fps, (i1 - 1) / fps
-    best = (-1.0, bpm0, 0.0)
-    for bpm in np.arange(bpm0 * 0.97, bpm0 * 1.03, 0.05):
-        period = 60 / bpm
-        beats = np.arange(t0, t1 - period / 2, period)
-        for phase in np.arange(0, period, 0.01):
-            idx = np.rint((beats + phase) * fps).astype(int)
-            idx = idx[idx < i1]
-            sc = smooth[idx].mean() if len(idx) else -1.0
-            if sc > best[0]:
-                best = (sc, float(bpm), float(phase))
-    _, bpm, phase = best
+    return float(bpms[int(np.argmax(ac[lags] * np.exp(-0.5 * (np.log2(bpms / 120) / 0.8) ** 2)))])
+
+
+def _track_beats(env, bpm: float) -> list[float]:
+    """Beat times (s) that follow the drummer: dynamic programming (Ellis 2007) picks the beats that land on strong
+    onsets while keeping each gap close to the rough tempo. The tempo may wander as far as the hits do, so a
+    recording that drifts is followed instead of fitted with one grid."""
+    import numpy as np
+    fps = BEAT_RATE / BEAT_HOP
+    period = fps * 60 / bpm  # frames
+    env = env / (env.std() + 1e-9)
+    local = np.convolve(env, np.exp(-0.5 * (np.arange(-int(period / 8), int(period / 8) + 1) / (period / 32)) ** 2), mode="same")
+    cum, prev = local.copy(), np.full(len(env), -1)
+    lo, hi = max(1, int(period / 2)), int(period * 2)
+    gaps = np.arange(lo, hi + 1)
+    penalty = 100 * np.log(gaps / period) ** 2
+    for i in range(lo, len(env)):
+        j = i - gaps[gaps <= i]
+        cand = cum[j] - penalty[: len(j)]
+        k = int(np.argmax(cand))
+        if cand[k] > 0:
+            cum[i] = local[i] + cand[k]
+            prev[i] = j[k]
+    tail = int(np.argmax(cum[-int(period * 2):])) + max(0, len(cum) - int(period * 2))
+    beats = []
+    while tail >= 0:
+        beats.append(tail)
+        tail = prev[tail]
+    beats = np.array(beats[::-1])
+    keep = local[beats] > 0.3 * np.median(local[beats])  # a "beat" on no hit at all: silence, not a beat
     # A frame is stamped with its start; the hit it shows lies about the middle of the window.
-    return bpm, (t0 + phase + BEAT_FFT / 2 / BEAT_RATE) % (60 / bpm)
+    return [round(float(f) / fps + BEAT_FFT / 2 / BEAT_RATE, 3) for f in beats[keep]]
 
 
 def compute_beats(drums: Path, rest: Path) -> dict:
-    """Where to click, as {"sections": [{"start", "end", "bpm", "offset"}]}: the stretches where the drums play on
-    their own (the rest of the band is silent, e.g. a drum-only intro), each with its own tempo and beat phase taken
-    from the drums there. Old recordings drift, so one grid for the whole song would not hold; this does not need to."""
+    """Click data: {"beats": [times in s], "alone": [[start, end], ...]}. The beats are tracked in the drums stem
+    (see _track_beats); "alone" are the stretches where the rest of the band is silent (e.g. a drum-only intro)."""
     import numpy as np
     d, r = _decode(drums), _decode(rest)
     dl, rl = _level_db(d), _level_db(r)
     n = min(len(dl), len(rl))
-    quiet = rl[:n] < np.percentile(rl, 90) - ALONE_DB
-    playing = dl[:n] > np.percentile(dl, 90) - ALONE_DB
-    alone = quiet & playing
+    alone = (rl[:n] < np.percentile(rl, 90) - ALONE_DB) & (dl[:n] > np.percentile(dl, 90) - ALONE_DB)
     env = _onset_envelope(d)
-    fps = BEAT_RATE / BEAT_HOP
-    sections, i = [], 0
+    runs, i = [], 0
     while i < n:
         if not alone[i]:
             i += 1
@@ -204,11 +214,9 @@ def compute_beats(drums: Path, rest: Path) -> dict:
         while j < n and (alone[j] or (j + 1 < n and alone[j + 1])):  # bridge a single dropped 100 ms block
             j += 1
         if (j - i) / 10 >= ALONE_MIN:
-            bpm, offset = _fit_tempo(env, int(i / 10 * fps), min(int(j / 10 * fps), len(env)))
-            sections.append({"start": round(i / 10, 1), "end": round(j / 10, 1),
-                             "bpm": round(bpm, 2), "offset": round(offset, 3)})
+            runs.append([round(i / 10, 1), round(j / 10, 1)])
         i = j
-    return {"sections": sections}
+    return {"beats": _track_beats(env, _tempo(env)), "alone": runs}
 
 
 def beats_for(track_id: str, drums: Path, rest: Path) -> dict:
@@ -216,7 +224,7 @@ def beats_for(track_id: str, drums: Path, rest: Path) -> dict:
     cache = track_dir(track_id) / "beats.json"
     try:
         data = json.loads(cache.read_text())
-        if "sections" in data:  # an older format is recomputed
+        if "beats" in data:  # an older format is recomputed
             return data
     except (OSError, ValueError):
         pass

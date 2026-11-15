@@ -89,7 +89,7 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
  <div class="transport"><button class="skip" id="back">⏪ 10s</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
  <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
- <div class="loop"><button class="skip" id="click" title="Click on every beat where the drums play on their own">♩ Click</button><span id="clicktxt"></span><button class="skip" id="chalf" hidden>½</button><button class="skip" id="cdouble" hidden>×2</button><button class="skip" id="cearly" hidden title="Click 10 ms earlier">◂</button><button class="skip" id="clate" hidden title="Click 10 ms later">▸</button></div>
+ <div class="loop"><button class="skip" id="click" title="Click on the beats the drummer plays">♩ Click</button><span id="clicktxt"></span><button class="skip" id="calone" hidden title="Click only where the rest of the band is silent">Drums alone only</button><button class="skip" id="chalf" hidden>½</button><button class="skip" id="cdouble" hidden>×2</button><button class="skip" id="cearly" hidden title="Click 10 ms earlier">◂</button><button class="skip" id="clate" hidden title="Click 10 ms later">▸</button></div>
  <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
  <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
  <audio id="audio" preload="auto"></audio>
@@ -136,7 +136,7 @@ function showStem(keepPos){
 function select(id){
   const l=(tracks.find(t=>t.id===id)||{}).loop;
   loop=l?{a:l.a,b:l.b,on:!!l.on}:{a:null,b:null,on:false};updateLoopUi();
-  cur=id;stem="no_drums";view={s:0,l:null};tempoMul=1;nudge=0;lastBeat=-1;loadBeat();
+  cur=id;stem="no_drums";view={s:0,l:null};tempoExp=0;nudge=0;loadBeat();
   for(const k in peakCache)if(!k.startsWith(id+"/"))delete peakCache[k];$("#player").hidden=false;
   $("#plinks").innerHTML=Object.entries(STEMS).map(([k,l])=>`<a href="/files/${id}/${k}?dl=1">${l}</a>`).join("");
   $("#dl").open=false;showStem(false);syncPlayer();
@@ -267,35 +267,37 @@ function enforceLoop(){ // seek back from the end of the section (only just past
   if(audio.paused||dragging||!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t>=loop.b&&t<loop.b+1)audio.currentTime=loop.a;
 }
-// Click: only where the drums play on their own (the server finds those stretches and a tempo for each of them:
-// old recordings drift, so a grid for the whole song would not hold). Elsewhere you play along with the band.
-let click=false,beat=null,tempoMul=1,nudge=0,lastBeat=-1,lastSec=-1,ctx=null;
-try{click=localStorage.getItem("click")==="1"}catch(e){}
-const secAt=t=>beat&&beat.sections?beat.sections.findIndex(s=>t>=s.start&&t<s.end):-1;
+// Click: on the beats followed in the drums stem (the server finds the drummer's actual hits, so a recording that
+// drifts is followed too). With "alone" on it plays only where the rest of the band is silent.
+let click=false,alone=false,beat=null,shown=[],tempoExp=0,nudge=0,lastT=-1,ctx=null;
+try{click=localStorage.getItem("click")==="1";alone=localStorage.getItem("calone")==="1"}catch(e){}
+function reshape(){ // ½ / ×2: every other beat, or a beat added in every gap
+  let b=beat&&beat!=="err"?beat.beats:[];
+  for(let e=tempoExp;e<0;e++)b=b.filter((_,i)=>i%2===0);
+  for(let e=tempoExp;e>0;e--)b=b.flatMap((x,i)=>i+1<b.length?[x,(x+b[i+1])/2]:[x]);
+  shown=b;lastT=-1;
+}
 function updateClickUi(){
-  $("#click").classList.toggle("on",click);
-  const secs=beat&&beat!=="err"?beat.sections.length:0,sec=secs?beat.sections[Math.max(0,secAt(audio.currentTime))]:null;
-  for(const id of["chalf","cdouble","cearly","clate"])$("#"+id).hidden=!(click&&secs);
-  $("#clicktxt").textContent=!click?"":!beat?"finding the drums-only parts…":beat==="err"?"detection failed":!secs?"no drums-only part in this song"
-    :secs+(secs>1?" parts":" part")+" with the drums alone · "+Math.round(sec.bpm*tempoMul*10)/10+" BPM"+(nudge?" · "+(nudge>0?"+":"")+nudge+" ms":"");
+  $("#click").classList.toggle("on",click);$("#calone").classList.toggle("on",alone);
+  const ok=beat&&beat!=="err"&&beat.beats.length>0;
+  for(const id of["calone","chalf","cdouble","cearly","clate"])$("#"+id).hidden=!(click&&ok);
+  $("#clicktxt").textContent=!click?"":!beat?"following the drums…":beat==="err"?"detection failed":!ok?"no beat found"
+    :(tempoExp?(tempoExp>0?"×"+2**tempoExp:"÷"+2**-tempoExp)+" · ":"")+(nudge?(nudge>0?"+":"")+nudge+" ms · ":"")+(alone?(beat.alone.length?"drums alone only":"no drums-only part in this song"):"every beat");
 }
 async function loadBeat(){
-  const id=cur;beat=null;updateClickUi();if(!id||!click)return;
+  const id=cur;beat=null;reshape();updateClickUi();if(!id||!click)return;
   try{const r=await fetch("/api/tracks/"+id+"/beats");if(!r.ok)throw 0;const b=await r.json();if(cur===id)beat=b}
   catch(e){if(cur===id)beat="err"}
-  updateClickUi();
+  reshape();updateClickUi();
 }
 function tick(){
-  if(!click||!beat||beat==="err"||audio.paused||!ctx)return;
-  const t=audio.currentTime,ahead=0.15*rate,k=secAt(t);
-  if(k!==lastSec){lastSec=k;lastBeat=-1;updateClickUi()}
-  if(k<0)return;
-  const sec=beat.sections[k],p=60/(sec.bpm*tempoMul),off=sec.offset+nudge/1000;
-  let n=Math.ceil((t-off)/p-1e-9);
-  if(lastBeat>=n+Math.ceil(2*ahead/p)+1||lastBeat<n-2)lastBeat=n-1; // seeked or looped
-  for(;off+n*p<t+ahead;n++){
-    if(n<=lastBeat)continue;lastBeat=n;
-    const at=off+n*p;if(at<sec.start||at>=sec.end)continue;
+  if(!click||!shown.length||audio.paused||!ctx)return;
+  const t=audio.currentTime,ahead=0.15*rate,nd=nudge/1000;
+  if(lastT>t+ahead+0.2||lastT<t-1)lastT=t-0.001; // seeked or looped
+  let lo=0,hi=shown.length;while(lo<hi){const m=(lo+hi)>>1;if(shown[m]+nd<=lastT)lo=m+1;else hi=m}
+  for(let i=lo;i<shown.length&&shown[i]+nd<t+ahead;i++){
+    const at=shown[i]+nd;lastT=at;
+    if(at<t-0.02||(alone&&!beat.alone.some(r=>at>=r[0]&&at<r[1])))continue;
     const when=ctx.currentTime+(at-t)/rate;
     const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=1500;
     g.gain.setValueAtTime(0.0001,when);g.gain.exponentialRampToValueAtTime(0.5,when+0.002);g.gain.exponentialRampToValueAtTime(0.0001,when+0.06);
@@ -308,10 +310,11 @@ $("#click").onclick=()=>{
   if(click){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume();if(!beat||beat==="err")loadBeat()}
   updateClickUi();
 };
-$("#chalf").onclick=()=>{tempoMul/=2;lastBeat=-1;updateClickUi()};
-$("#cdouble").onclick=()=>{tempoMul*=2;lastBeat=-1;updateClickUi()};
-$("#cearly").onclick=()=>{nudge-=10;lastBeat=-1;updateClickUi()};
-$("#clate").onclick=()=>{nudge+=10;lastBeat=-1;updateClickUi()};
+$("#chalf").onclick=()=>{tempoExp--;reshape();updateClickUi()};
+$("#cdouble").onclick=()=>{tempoExp++;reshape();updateClickUi()};
+$("#cearly").onclick=()=>{nudge-=10;lastT=-1;updateClickUi()};
+$("#clate").onclick=()=>{nudge+=10;lastT=-1;updateClickUi()};
+$("#calone").onclick=()=>{alone=!alone;try{localStorage.setItem("calone",alone?"1":"0")}catch(e){}updateClickUi()};
 function snapToLoop(){ // with the section on, playback starts inside it
   if(!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t<loop.a||t>=loop.b)audio.currentTime=loop.a;

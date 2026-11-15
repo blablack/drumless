@@ -118,7 +118,7 @@ def peaks(track_id: str, kind: str) -> Response:
 
 @app.get("/api/tracks/{track_id}/beats")
 def beats(track_id: str) -> dict:
-    """Where the click plays: the stretches of drums on their own, each with a tempo (see worker.compute_beats)."""
+    """The beats followed in the drums, and where the drums play alone (see worker.compute_beats)."""
     known(track_id)
     drums, rest = worker.file_for(track_id, "drums"), worker.file_for(track_id, "no_drums")
     if not drums or not rest:
