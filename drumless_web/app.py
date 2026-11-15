@@ -116,6 +116,20 @@ def peaks(track_id: str, kind: str) -> Response:
     return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "private, max-age=3600"})
 
 
+@app.get("/api/tracks/{track_id}/beats")
+def beats(track_id: str) -> dict:
+    """Tempo and first-beat time of the song, for the click (see worker.compute_beats). Taken from the drums."""
+    known(track_id)
+    path = worker.file_for(track_id, "drums")
+    if not path:
+        raise HTTPException(404)
+    try:
+        return worker.beats_for(track_id, path)
+    except Exception:
+        logging.getLogger("drumless").exception("beat detection failed for %s", track_id)
+        raise HTTPException(500, "could not detect the beat")
+
+
 @app.post("/api/tracks/{track_id}/cancel")
 def cancel(track_id: str) -> dict:
     meta = known(track_id)
