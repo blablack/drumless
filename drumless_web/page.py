@@ -266,7 +266,12 @@ function enforceLoop(){ // seek back from the end of the section (only just past
   if(audio.paused||dragging||!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t>=loop.b&&t<loop.b+1)audio.currentTime=loop.a;
 }
+function snapToLoop(){ // with the section on, playback starts inside it
+  if(!loop.on||loop.a===null)return;
+  const t=audio.currentTime;if(t<loop.a||t>=loop.b)audio.currentTime=loop.a;
+}
 audio.onplay=audio.onpause=audio.onended=()=>{
+  if(!audio.paused)snapToLoop();
   const p=!audio.paused&&!audio.ended;
   document.body.classList.toggle("playing",p);
   $("#play").textContent=p?"❚❚":"▶";$("#play").setAttribute("aria-label",p?"Pause":"Play");
@@ -414,7 +419,7 @@ $("#loopsec").onclick=()=>{
     if(loop.a===null){ // first use: a section starting at the playhead, 10% of the song long
       const span=Math.min(d,Math.max(4,d*0.1));loop.a=Math.max(0,Math.min(audio.currentTime,d-span));loop.b=loop.a+span;
     }
-    loop.on=true;
+    loop.on=true;snapToLoop();
   }
   updateLoopUi();dirty=true;saveLoop();
 };
