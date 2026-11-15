@@ -118,13 +118,13 @@ def peaks(track_id: str, kind: str) -> Response:
 
 @app.get("/api/tracks/{track_id}/beats")
 def beats(track_id: str) -> dict:
-    """Tempo and first-beat time of the song, for the click (see worker.compute_beats). Taken from the drums."""
+    """Where the click plays: the stretches of drums on their own, each with a tempo (see worker.compute_beats)."""
     known(track_id)
-    path = worker.file_for(track_id, "drums")
-    if not path:
+    drums, rest = worker.file_for(track_id, "drums"), worker.file_for(track_id, "no_drums")
+    if not drums or not rest:
         raise HTTPException(404)
     try:
-        return worker.beats_for(track_id, path)
+        return worker.beats_for(track_id, drums, rest)
     except Exception:
         logging.getLogger("drumless").exception("beat detection failed for %s", track_id)
         raise HTTPException(500, "could not detect the beat")

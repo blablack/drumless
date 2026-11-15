@@ -89,7 +89,7 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
  <div class="transport"><button class="skip" id="back">⏪ 10s</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
  <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
- <div class="loop"><button class="skip" id="click" title="Click on every beat (tempo found from the drums)">♩ Click</button><span id="clicktxt"></span><button class="skip" id="chalf" hidden>½</button><button class="skip" id="cdouble" hidden>×2</button><button class="skip" id="cearly" hidden title="Click 10 ms earlier">◂</button><button class="skip" id="clate" hidden title="Click 10 ms later">▸</button></div>
+ <div class="loop"><button class="skip" id="click" title="Click on every beat where the drums play on their own">♩ Click</button><span id="clicktxt"></span><button class="skip" id="chalf" hidden>½</button><button class="skip" id="cdouble" hidden>×2</button><button class="skip" id="cearly" hidden title="Click 10 ms earlier">◂</button><button class="skip" id="clate" hidden title="Click 10 ms later">▸</button></div>
  <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
  <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
  <audio id="audio" preload="auto"></audio>
@@ -267,15 +267,17 @@ function enforceLoop(){ // seek back from the end of the section (only just past
   if(audio.paused||dragging||!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t>=loop.b&&t<loop.b+1)audio.currentTime=loop.a;
 }
-// Click: tempo and first beat come from the server (found in the drums stem, so it works through a drums-only intro).
-let click=false,beat=null,tempoMul=1,nudge=0,lastBeat=-1,ctx=null;
+// Click: only where the drums play on their own (the server finds those stretches and a tempo for each of them:
+// old recordings drift, so a grid for the whole song would not hold). Elsewhere you play along with the band.
+let click=false,beat=null,tempoMul=1,nudge=0,lastBeat=-1,lastSec=-1,ctx=null;
 try{click=localStorage.getItem("click")==="1"}catch(e){}
-function beatPeriod(){return 60/(beat.bpm*tempoMul)}
+const secAt=t=>beat&&beat.sections?beat.sections.findIndex(s=>t>=s.start&&t<s.end):-1;
 function updateClickUi(){
   $("#click").classList.toggle("on",click);
-  const show=click&&beat&&beat!=="err";
-  for(const id of["chalf","cdouble","cearly","clate"])$("#"+id).hidden=!show;
-  $("#clicktxt").textContent=!click?"":!beat?"finding the beat…":beat==="err"?"no beat found":Math.round(beat.bpm*tempoMul*10)/10+" BPM"+(nudge?" · "+(nudge>0?"+":"")+nudge+" ms":"");
+  const secs=beat&&beat!=="err"?beat.sections.length:0,sec=secs?beat.sections[Math.max(0,secAt(audio.currentTime))]:null;
+  for(const id of["chalf","cdouble","cearly","clate"])$("#"+id).hidden=!(click&&secs);
+  $("#clicktxt").textContent=!click?"":!beat?"finding the drums-only parts…":beat==="err"?"detection failed":!secs?"no drums-only part in this song"
+    :secs+(secs>1?" parts":" part")+" with the drums alone · "+Math.round(sec.bpm*tempoMul*10)/10+" BPM"+(nudge?" · "+(nudge>0?"+":"")+nudge+" ms":"");
 }
 async function loadBeat(){
   const id=cur;beat=null;updateClickUi();if(!id||!click)return;
@@ -285,12 +287,16 @@ async function loadBeat(){
 }
 function tick(){
   if(!click||!beat||beat==="err"||audio.paused||!ctx)return;
-  const t=audio.currentTime,p=beatPeriod(),off=beat.offset+nudge/1000,ahead=0.15*rate;
-  let n=Math.max(0,Math.ceil((t-off)/p-1e-9));
+  const t=audio.currentTime,ahead=0.15*rate,k=secAt(t);
+  if(k!==lastSec){lastSec=k;lastBeat=-1;updateClickUi()}
+  if(k<0)return;
+  const sec=beat.sections[k],p=60/(sec.bpm*tempoMul),off=sec.offset+nudge/1000;
+  let n=Math.ceil((t-off)/p-1e-9);
   if(lastBeat>=n+Math.ceil(2*ahead/p)+1||lastBeat<n-2)lastBeat=n-1; // seeked or looped
   for(;off+n*p<t+ahead;n++){
     if(n<=lastBeat)continue;lastBeat=n;
-    const when=ctx.currentTime+(off+n*p-t)/rate;
+    const at=off+n*p;if(at<sec.start||at>=sec.end)continue;
+    const when=ctx.currentTime+(at-t)/rate;
     const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=1500;
     g.gain.setValueAtTime(0.0001,when);g.gain.exponentialRampToValueAtTime(0.5,when+0.002);g.gain.exponentialRampToValueAtTime(0.0001,when+0.06);
     o.connect(g).connect(ctx.destination);o.start(when);o.stop(when+0.07);

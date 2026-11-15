@@ -125,57 +125,102 @@ def peaks_for(track_id: str, kind: str, path: Path) -> bytes:
 
 BEAT_RATE = 22050  # decode rate for beat detection
 BEAT_HOP = 220  # onset envelope step: 10 ms
+BEAT_FFT = 1024
+ALONE_DB = 30  # the rest of the band counts as absent when it is this far below its usual (90th percentile) level
+ALONE_MIN = 3.0  # seconds: shorter stretches of drums on their own aren't worth a click
 
 
-def compute_beats(path: Path) -> dict:
-    """Constant tempo and beat grid of a song, as {"bpm", "offset"} (offset: time of the first beat, in seconds).
-    Meant for the drums stem: its intro is heard even where the other stems are silent. Onset strength (spectral
-    flux) -> tempo from its autocorrelation -> BPM and phase refined by scoring a beat comb over the whole song."""
+def _decode(path: Path):
     import numpy as np
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", str(BEAT_RATE),
                           "-f", "s16le", "-"], capture_output=True, check=True).stdout
-    x = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768
-    n_fft = 1024
-    if len(x) < n_fft * 8:
-        raise ValueError("audio too short")
-    frames = np.lib.stride_tricks.sliding_window_view(x, n_fft)[::BEAT_HOP] * np.hanning(n_fft).astype(np.float32)
+    return np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768
+
+
+def _level_db(x):
+    """Level in dB of every 100 ms."""
+    import numpy as np
+    n = BEAT_RATE // 10
+    x = x[: len(x) // n * n].reshape(-1, n)
+    return 20 * np.log10(np.sqrt((x ** 2).mean(axis=1)) + 1e-9)
+
+
+def _onset_envelope(x):
+    """Onset strength every BEAT_HOP samples: spectral flux, minus its slow trend."""
+    import numpy as np
+    frames = np.lib.stride_tricks.sliding_window_view(x, BEAT_FFT)[::BEAT_HOP] * np.hanning(BEAT_FFT).astype(np.float32)
     mag = np.log1p(100 * np.abs(np.fft.rfft(frames, axis=1)))
-    flux = np.maximum(mag[1:] - mag[:-1], 0).mean(axis=1)
-    env = np.concatenate([[0], flux])
-    env = np.maximum(env - np.convolve(env, np.ones(51) / 51, mode="same"), 0)  # drop the slow trend
+    env = np.concatenate([[0], np.maximum(mag[1:] - mag[:-1], 0).mean(axis=1)])
+    return np.maximum(env - np.convolve(env, np.ones(51) / 51, mode="same"), 0)
+
+
+def _fit_tempo(env, i0: int, i1: int) -> tuple[float, float]:
+    """(bpm, offset in seconds from the start of env) of the beat grid that best fits env[i0:i1]: tempo from the
+    autocorrelation (60-200 BPM, favouring the usual range around 120: the octave is ambiguous), then BPM and phase
+    refined by averaging the envelope at the beats of every candidate grid."""
+    import numpy as np
     fps = BEAT_RATE / BEAT_HOP
-    # Tempo: autocorrelation over 60-200 BPM, favouring the usual range around 120 (the octave is ambiguous).
-    ac = np.correlate(env, env, mode="full")[len(env) - 1:]
-    lags = np.arange(int(fps * 60 / 200), int(fps * 60 / 60) + 1)
+    seg = env[i0:i1]
+    ac = np.correlate(seg, seg, mode="full")[len(seg) - 1:]
+    lags = np.arange(int(fps * 60 / 200), min(int(fps * 60 / 60), len(seg) - 1) + 1)
     bpms = 60 * fps / lags
-    score = ac[lags] * np.exp(-0.5 * (np.log2(bpms / 120) / 0.8) ** 2)
-    bpm0 = float(bpms[int(np.argmax(score))])
-    # Refine: for each tempo near the estimate and each phase, average the envelope at the beats.
+    bpm0 = float(bpms[int(np.argmax(ac[lags] * np.exp(-0.5 * (np.log2(bpms / 120) / 0.8) ** 2)))])
     smooth = np.convolve(env, np.hanning(5) / np.hanning(5).sum(), mode="same")
-    t_end = (len(env) - 1) / fps
+    t0, t1 = i0 / fps, (i1 - 1) / fps
     best = (-1.0, bpm0, 0.0)
     for bpm in np.arange(bpm0 * 0.97, bpm0 * 1.03, 0.05):
         period = 60 / bpm
-        beats = np.arange(0, t_end - period, period)
+        beats = np.arange(t0, t1 - period / 2, period)
         for phase in np.arange(0, period, 0.01):
             idx = np.rint((beats + phase) * fps).astype(int)
-            sc = smooth[idx].mean()
+            idx = idx[idx < i1]
+            sc = smooth[idx].mean() if len(idx) else -1.0
             if sc > best[0]:
                 best = (sc, float(bpm), float(phase))
     _, bpm, phase = best
     # A frame is stamped with its start; the hit it shows lies about the middle of the window.
-    phase = (phase + n_fft / 2 / BEAT_RATE) % (60 / bpm)
-    return {"bpm": round(bpm, 2), "offset": round(phase, 3)}
+    return bpm, (t0 + phase + BEAT_FFT / 2 / BEAT_RATE) % (60 / bpm)
 
 
-def beats_for(track_id: str, path: Path) -> dict:
-    """Beat grid of a track, computed on first use and kept next to the audio."""
+def compute_beats(drums: Path, rest: Path) -> dict:
+    """Where to click, as {"sections": [{"start", "end", "bpm", "offset"}]}: the stretches where the drums play on
+    their own (the rest of the band is silent, e.g. a drum-only intro), each with its own tempo and beat phase taken
+    from the drums there. Old recordings drift, so one grid for the whole song would not hold; this does not need to."""
+    import numpy as np
+    d, r = _decode(drums), _decode(rest)
+    dl, rl = _level_db(d), _level_db(r)
+    n = min(len(dl), len(rl))
+    quiet = rl[:n] < np.percentile(rl, 90) - ALONE_DB
+    playing = dl[:n] > np.percentile(dl, 90) - ALONE_DB
+    alone = quiet & playing
+    env = _onset_envelope(d)
+    fps = BEAT_RATE / BEAT_HOP
+    sections, i = [], 0
+    while i < n:
+        if not alone[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and (alone[j] or (j + 1 < n and alone[j + 1])):  # bridge a single dropped 100 ms block
+            j += 1
+        if (j - i) / 10 >= ALONE_MIN:
+            bpm, offset = _fit_tempo(env, int(i / 10 * fps), min(int(j / 10 * fps), len(env)))
+            sections.append({"start": round(i / 10, 1), "end": round(j / 10, 1),
+                             "bpm": round(bpm, 2), "offset": round(offset, 3)})
+        i = j
+    return {"sections": sections}
+
+
+def beats_for(track_id: str, drums: Path, rest: Path) -> dict:
+    """Click sections of a track, computed on first use and kept next to the audio."""
     cache = track_dir(track_id) / "beats.json"
     try:
-        return json.loads(cache.read_text())
+        data = json.loads(cache.read_text())
+        if "sections" in data:  # an older format is recomputed
+            return data
     except (OSError, ValueError):
         pass
-    data = compute_beats(path)
+    data = compute_beats(drums, rest)
     tmp = cache.with_suffix(f".{uuid.uuid4().hex[:6]}.tmp")
     tmp.write_text(json.dumps(data))
     tmp.replace(cache)
