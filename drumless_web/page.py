@@ -203,6 +203,18 @@ function drawWave(){
   const step=[1,2,5,10,15,30,60,120,300,600].find(v=>v/l*W>=80)||600;
   c.fillStyle=mute;c.strokeStyle=line;c.lineWidth=1;c.font="11px system-ui,sans-serif";
   for(let t=Math.ceil(s/step)*step;t<=s+l;t+=step){const x=Math.round(xOf(t))+.5;c.beginPath();c.moveTo(x,Hw);c.lineTo(x,Hw+4);c.stroke();c.fillText(fmt(t),x+3,H-3)}
+  if(click.on){ // where the click's beats fall (the first one stronger); too close together to tell apart when zoomed out
+    const g=60/click.bpm,s0=click.start/1000,px=g/l*W;
+    if(px>=4){
+      c.strokeStyle=css("--err");c.lineWidth=1;
+      for(let i=Math.max(0,Math.ceil((s-s0)/g));i<click.beats;i++){
+        const t=s0+i*g;if(t>s+l)break;
+        const x=Math.round(xOf(t))+.5;c.globalAlpha=i?.55:1;c.lineWidth=i?1:2;
+        c.beginPath();c.moveTo(x,0);c.lineTo(x,Hw);c.stroke();
+      }
+      c.globalAlpha=1;
+    }
+  }
   if(on)for(const x of[xa,xb]){
     if(x<-8||x>W+8)continue;
     c.strokeStyle=acc;c.fillStyle=acc;c.lineWidth=3;c.beginPath();c.moveTo(x,0);c.lineTo(x,Hw);c.stroke();
@@ -289,7 +301,7 @@ function loadClick(){
 }
 function updateClickUi(){
   clickEnd=click.start+(click.beats-1)*gapMs();
-  $("#click").classList.toggle("on",click.on);$("#clickset").hidden=!click.on;
+  dirty=true;$("#click").classList.toggle("on",click.on);$("#clickset").hidden=!click.on;
   $("#cmode").value=click.mode;
   $("#cstart").value=Math.round(click.start);$("#cend").value=Math.round(clickEnd);
   $("#cbpm").value=+click.bpm.toFixed(2);$("#cbeats").value=click.beats;
