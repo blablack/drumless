@@ -90,7 +90,7 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
  <div class="seg" id="stems"><button data-stem="no_drums">Without drums</button><button data-stem="drums">Drums only</button><button data-stem="original">Original</button></div>
  <div class="wavehead"><span id="time">0:00 / 0:00</span><span class="zoom"><button id="zout" aria-label="Zoom out">−</button><button id="zin" aria-label="Zoom in">+</button><button id="zfit" title="Show the whole song">Fit</button><button id="zloop" title="Zoom to the loop section">Loop</button></span></div>
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
- <div class="transport"><button class="skip" id="back">⏪ 10s</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
+ <div class="transport"><button class="skip" id="back">⏪ 10s</button><button class="skip" id="stop" aria-label="Stop" title="Stop and go back to the beginning">⏹</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
  <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
  <div class="loop"><button class="skip" id="click" title="Click in place of the missing drums">♩ Click</button></div>
  <div class="loop" id="clickset" hidden>
@@ -426,6 +426,7 @@ $("#pren").onclick=async()=>{
 $("#stems").onclick=e=>{const k=e.target.dataset.stem;if(k&&k!==stem){stem=k;showStem(true)}};
 $("#rates").onclick=e=>{const r=e.target.dataset.rate;if(r)setRate(r/100)};
 $("#play").onclick=()=>audio.paused?audio.play().catch(()=>{}):audio.pause();
+$("#stop").onclick=()=>{audio.pause();audio.currentTime=0};
 $("#back").onclick=()=>{audio.currentTime=Math.max(0,audio.currentTime-10)};
 $("#fwd").onclick=()=>{audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+10)};
 const pts=new Map();let g=null;
