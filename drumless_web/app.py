@@ -116,20 +116,6 @@ def peaks(track_id: str, kind: str) -> Response:
     return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "private, max-age=3600"})
 
 
-@app.get("/api/tracks/{track_id}/beats")
-def beats(track_id: str) -> dict:
-    """The beats followed in the drums, and where the drums play alone (see worker.compute_beats)."""
-    known(track_id)
-    drums, rest = worker.file_for(track_id, "drums"), worker.file_for(track_id, "no_drums")
-    if not drums or not rest:
-        raise HTTPException(404)
-    try:
-        return worker.beats_for(track_id, drums, rest)
-    except Exception:
-        logging.getLogger("drumless").exception("beat detection failed for %s", track_id)
-        raise HTTPException(500, "could not detect the beat")
-
-
 @app.post("/api/tracks/{track_id}/cancel")
 def cancel(track_id: str) -> dict:
     meta = known(track_id)
@@ -165,6 +151,22 @@ def set_loop(track_id: str, body: dict) -> dict:
     if not 0 <= a < b < 86400:
         raise HTTPException(422, "need 0 <= a < b")
     worker.update_meta(track_id, loop={"a": round(a, 2), "b": round(b, 2), "on": on})
+    return {"ok": True}
+
+
+@app.post("/api/tracks/{track_id}/click")
+def set_click(track_id: str, body: dict) -> dict:
+    """Remember the click for a track: first beat (ms), tempo (BPM), number of beats, and whether it is switched on."""
+    meta = known(track_id)
+    if meta["status"] in ("separating", "mixing"):
+        raise HTTPException(409, "still processing")
+    try:
+        start, bpm, beats, on = float(body["start"]), float(body["bpm"]), int(body["beats"]), bool(body.get("on", True))
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(422, "need numeric start, bpm and beats")
+    if not (0 <= start < 86400000 and 20 <= bpm <= 400 and 0 <= beats <= 10000):
+        raise HTTPException(422, "start, bpm or beats out of range")
+    worker.update_meta(track_id, click={"start": round(start), "bpm": round(bpm, 2), "beats": beats, "on": on})
     return {"ok": True}
 
 

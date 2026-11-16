@@ -4,7 +4,7 @@ Upload a song, get it back without the drums, then practise along with it.
 
 [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) (BS-RoFormer SW, 6 stems, CPU only) splits the song, and ffmpeg sums every
 non-drum stem into a drumless track. The page plays the drumless track, the drums only, or the original, at 50–100 % speed
-(pitch kept), with a whole-track repeat and a draggable loop section on a zoomable waveform. The loop is remembered per song.
+(pitch kept), with a whole-track repeat and a draggable loop section on a zoomable waveform. The loop is remembered per song. A manual click (first beat in ms, BPM, number of beats) can cover a drums-only intro.
 
 ## Run it
 
@@ -22,7 +22,7 @@ Needs `ffmpeg` on the PATH. The first track downloads the model into `$DRUMLESS_
 
 ## How it works
 
-- `drumless_web/app.py`: the FastAPI app (upload, list, download, rename, cancel, delete, loop, peaks).
+- `drumless_web/app.py`: the FastAPI app (upload, list, download, rename, cancel, delete, loop, click, peaks).
 - `drumless_web/worker.py`: storage and the single separation worker. There is no database: each `tracks/<id>/` directory is the
   whole state (`meta.json`, the original, `no_drums.flac`, `drums.flac`, cached `peaks_*.bin`), so a restart just queues unfinished tracks again.
 - `drumless_web/page.py`: the whole UI, one inline HTML page.

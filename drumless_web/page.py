@@ -50,6 +50,7 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 #play{width:64px;height:64px;border-radius:50%;background:var(--accent);color:#fff;font-size:1.4rem}
 .skip{color:var(--text);border:1px solid var(--line)!important;border-radius:20px;padding:8px 14px}
 .loop{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:14px;font-size:.85rem;color:var(--mute);font-variant-numeric:tabular-nums}
+.loop input{width:5.5em;background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
 .skip.on{background:var(--accent);border-color:var(--accent)!important;color:#fff}
 .rates{display:flex;gap:6px;align-items:center;margin-top:16px}
 .rates span{color:var(--mute);font-size:.75rem;letter-spacing:.08em;margin-right:4px}
@@ -89,7 +90,9 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
  <div class="transport"><button class="skip" id="back">⏪ 10s</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
  <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
- <div class="loop"><button class="skip" id="click" title="Click in place of the missing drums">♩ Click</button><span id="clicktxt"></span></div>
+ <div class="loop"><button class="skip" id="click" title="Click in place of the missing drums">♩ Click</button>
+  <span id="clickset" hidden><label>start <input id="cstart" type="number" min="0" step="10"> ms</label> <button id="cnow" title="Use the playhead">⌖</button>
+  <label><input id="cbpm" type="number" min="20" max="400" step="0.1"> BPM</label> <label><input id="cbeats" type="number" min="0" max="10000" step="1"> beats</label></span></div>
  <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
  <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
  <audio id="audio" preload="auto"></audio>
@@ -136,7 +139,7 @@ function showStem(keepPos){
 function select(id){
   const l=(tracks.find(t=>t.id===id)||{}).loop;
   loop=l?{a:l.a,b:l.b,on:!!l.on}:{a:null,b:null,on:false};updateLoopUi();
-  cur=id;stem="no_drums";view={s:0,l:null};loadBeat();
+  cur=id;stem="no_drums";view={s:0,l:null};loadClick();
   for(const k in peakCache)if(!k.startsWith(id+"/"))delete peakCache[k];$("#player").hidden=false;
   $("#plinks").innerHTML=Object.entries(STEMS).map(([k,l])=>`<a href="/files/${id}/${k}?dl=1">${l}</a>`).join("");
   $("#dl").open=false;showStem(false);syncPlayer();
@@ -267,36 +270,36 @@ function enforceLoop(){ // seek back from the end of the section (only just past
   if(audio.paused||dragging||!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t>=loop.b&&t<loop.b+1)audio.currentTime=loop.a;
 }
-// Click: covers for the missing drums. It plays on the drummer's beats (followed in the drums stem by the server)
-// where the rest of the band is silent, and for 2 bars after the band comes in, to give time to find your feet.
-const CLICK_BARS=2,BEATS_PER_BAR=4;
-let click=false,beat=null,spans=[],lastT=-1,ctx=null;
-try{click=localStorage.getItem("click")==="1"}catch(e){}
-function makeSpans(){
-  spans=[];if(!beat||beat==="err")return;
-  for(const[a,b]of beat.alone){ // the end moves on by 2 bars of the song's own beats
-    const i=beat.beats.findIndex(x=>x>=b),e=i<0?b:beat.beats[Math.min(beat.beats.length-1,i+CLICK_BARS*BEATS_PER_BAR-1)];
-    spans.push([a,Math.max(b,e)]);
-  }
+// Click: a metronome you set by hand where the drums are missing (e.g. a drums-only intro): the first beat in ms,
+// the tempo, and how many beats to play. Saved per song.
+let click={start:0,bpm:120,beats:16,on:false},lastT=-1,ctx=null;
+function loadClick(){
+  const c=(tracks.find(t=>t.id===cur)||{}).click;
+  click=c?{start:c.start,bpm:c.bpm,beats:c.beats,on:!!c.on}:{start:0,bpm:120,beats:16,on:false};
+  updateClickUi();
 }
 function updateClickUi(){
-  $("#click").classList.toggle("on",click);
-  $("#clicktxt").textContent=!click?"":!beat?"following the drums…":beat==="err"?"detection failed":!spans.length?"no drums-only part in this song":"";
+  $("#click").classList.toggle("on",click.on);$("#clickset").hidden=!click.on;
+  $("#cstart").value=click.start;$("#cbpm").value=click.bpm;$("#cbeats").value=click.beats;
 }
-async function loadBeat(){
-  const id=cur;beat=null;makeSpans();updateClickUi();if(!id||!click)return;
-  try{const r=await fetch("/api/tracks/"+id+"/beats");if(!r.ok)throw 0;const b=await r.json();if(cur===id)beat=b}
-  catch(e){if(cur===id)beat="err"}
-  makeSpans();updateClickUi();
+function saveClick(){
+  if(!cur)return;
+  const t=tracks.find(t=>t.id===cur);if(t)t.click={...click};
+  fetch("/api/tracks/"+cur+"/click",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(click)}).catch(()=>{});
+}
+function readClick(){
+  const s=+$("#cstart").value,b=+$("#cbpm").value,n=Math.round(+$("#cbeats").value);
+  if(s>=0&&b>=20&&b<=400&&n>=0)click={start:Math.round(s),bpm:b,beats:n,on:click.on};
+  lastT=-1;saveClick();
 }
 function tick(){
-  if(!click||!spans.length||audio.paused||!ctx)return;
-  const t=audio.currentTime,ahead=0.15*rate,bs=beat.beats;
+  if(!click.on||audio.paused||!ctx)return;
+  const t=audio.currentTime,ahead=0.15*rate,gap=60/click.bpm,s0=click.start/1000;
   if(lastT>t+ahead+0.2||lastT<t-1)lastT=t-0.001; // seeked or looped
-  let lo=0,hi=bs.length;while(lo<hi){const m=(lo+hi)>>1;if(bs[m]<=lastT)lo=m+1;else hi=m}
-  for(let i=lo;i<bs.length&&bs[i]<t+ahead;i++){
-    const at=bs[i];lastT=at;
-    if(at<t-0.02||!spans.some(r=>at>=r[0]&&at<=r[1]))continue;
+  for(let i=Math.max(0,Math.ceil((lastT-s0)/gap-1e-9));i<click.beats;i++){
+    const at=s0+i*gap;if(at>=t+ahead)break;
+    if(at<=lastT)continue;
+    lastT=at;if(at<t-0.02)continue;
     const when=ctx.currentTime+(at-t)/rate;
     const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=1500;
     g.gain.setValueAtTime(0.0001,when);g.gain.exponentialRampToValueAtTime(0.5,when+0.002);g.gain.exponentialRampToValueAtTime(0.0001,when+0.06);
@@ -305,17 +308,19 @@ function tick(){
 }
 setInterval(tick,25);
 $("#click").onclick=()=>{
-  click=!click;try{localStorage.setItem("click",click?"1":"0")}catch(e){}
-  if(click){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume();if(!beat||beat==="err")loadBeat()}
-  updateClickUi();
+  click.on=!click.on;
+  if(click.on){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}
+  updateClickUi();saveClick();
 };
+["#cstart","#cbpm","#cbeats"].forEach(k=>$(k).onchange=readClick);
+$("#cnow").onclick=()=>{$("#cstart").value=Math.round(audio.currentTime*1000);readClick()};
 function snapToLoop(){ // with the section on, playback starts inside it
   if(!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t<loop.a||t>=loop.b)audio.currentTime=loop.a;
 }
 audio.onplay=audio.onpause=audio.onended=()=>{
   if(!audio.paused)snapToLoop();
-  if(!audio.paused&&click){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}
+  if(!audio.paused&&click.on){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}
   const p=!audio.paused&&!audio.ended;
   document.body.classList.toggle("playing",p);
   $("#play").textContent=p?"❚❚":"▶";$("#play").setAttribute("aria-label",p?"Pause":"Play");

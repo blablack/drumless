@@ -54,7 +54,7 @@ _meta_lock = threading.Lock()
 
 
 def update_meta(track_id: str, **fields) -> dict | None:
-    """Read-modify-write meta.json under a lock, for edits made outside the worker (rename, loop)."""
+    """Read-modify-write meta.json under a lock, for edits made outside the worker (rename, loop, click)."""
     with _meta_lock:
         meta = read_meta(track_id)
         if not meta:
@@ -119,118 +119,6 @@ def peaks_for(track_id: str, kind: str, path: Path) -> bytes:
     data = compute_peaks(path)
     tmp = cache.with_suffix(f".{uuid.uuid4().hex[:6]}.tmp")
     tmp.write_bytes(data)
-    tmp.replace(cache)
-    return data
-
-
-BEAT_RATE = 22050  # decode rate for beat detection
-BEAT_HOP = 220  # onset envelope step: 10 ms
-BEAT_FFT = 1024
-ALONE_DB = 30  # the rest of the band counts as absent when it is this far below its usual (90th percentile) level
-ALONE_MIN = 3.0  # seconds: shorter stretches of drums on their own aren't worth a click
-
-
-def _decode(path: Path):
-    import numpy as np
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", str(BEAT_RATE),
-                          "-f", "s16le", "-"], capture_output=True, check=True).stdout
-    return np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768
-
-
-def _level_db(x):
-    """Level in dB of every 100 ms."""
-    import numpy as np
-    n = BEAT_RATE // 10
-    x = x[: len(x) // n * n].reshape(-1, n)
-    return 20 * np.log10(np.sqrt((x ** 2).mean(axis=1)) + 1e-9)
-
-
-def _onset_envelope(x):
-    """Onset strength every BEAT_HOP samples: spectral flux, minus its slow trend."""
-    import numpy as np
-    frames = np.lib.stride_tricks.sliding_window_view(x, BEAT_FFT)[::BEAT_HOP] * np.hanning(BEAT_FFT).astype(np.float32)
-    mag = np.log1p(100 * np.abs(np.fft.rfft(frames, axis=1)))
-    env = np.concatenate([[0], np.maximum(mag[1:] - mag[:-1], 0).mean(axis=1)])
-    return np.maximum(env - np.convolve(env, np.ones(51) / 51, mode="same"), 0)
-
-
-def _tempo(env) -> float:
-    """Rough tempo (BPM) of an onset envelope: autocorrelation over 60-200 BPM, favouring the usual range around 120
-    (the octave is ambiguous; the page has half/double buttons for when this picks the wrong one)."""
-    import numpy as np
-    fps = BEAT_RATE / BEAT_HOP
-    ac = np.correlate(env, env, mode="full")[len(env) - 1:]
-    lags = np.arange(int(fps * 60 / 200), min(int(fps * 60 / 60), len(env) - 1) + 1)
-    bpms = 60 * fps / lags
-    return float(bpms[int(np.argmax(ac[lags] * np.exp(-0.5 * (np.log2(bpms / 120) / 0.8) ** 2)))])
-
-
-def _track_beats(env, bpm: float) -> list[float]:
-    """Beat times (s) that follow the drummer: dynamic programming (Ellis 2007) picks the beats that land on strong
-    onsets while keeping each gap close to the rough tempo. The tempo may wander as far as the hits do, so a
-    recording that drifts is followed instead of fitted with one grid."""
-    import numpy as np
-    fps = BEAT_RATE / BEAT_HOP
-    period = fps * 60 / bpm  # frames
-    env = env / (env.std() + 1e-9)
-    local = np.convolve(env, np.exp(-0.5 * (np.arange(-int(period / 8), int(period / 8) + 1) / (period / 32)) ** 2), mode="same")
-    cum, prev = local.copy(), np.full(len(env), -1)
-    lo, hi = max(1, int(period / 2)), int(period * 2)
-    gaps = np.arange(lo, hi + 1)
-    penalty = 100 * np.log(gaps / period) ** 2
-    for i in range(lo, len(env)):
-        j = i - gaps[gaps <= i]
-        cand = cum[j] - penalty[: len(j)]
-        k = int(np.argmax(cand))
-        if cand[k] > 0:
-            cum[i] = local[i] + cand[k]
-            prev[i] = j[k]
-    tail = int(np.argmax(cum[-int(period * 2):])) + max(0, len(cum) - int(period * 2))
-    beats = []
-    while tail >= 0:
-        beats.append(tail)
-        tail = prev[tail]
-    beats = np.array(beats[::-1])
-    keep = local[beats] > 0.3 * np.median(local[beats])  # a "beat" on no hit at all: silence, not a beat
-    # A frame is stamped with its start; the hit it shows lies about the middle of the window.
-    return [round(float(f) / fps + BEAT_FFT / 2 / BEAT_RATE, 3) for f in beats[keep]]
-
-
-def compute_beats(drums: Path, rest: Path) -> dict:
-    """Click data: {"beats": [times in s], "alone": [[start, end], ...]}. The beats are tracked in the drums stem
-    (see _track_beats); "alone" are the stretches where the rest of the band is silent (e.g. a drum-only intro)."""
-    import numpy as np
-    d, r = _decode(drums), _decode(rest)
-    dl, rl = _level_db(d), _level_db(r)
-    n = min(len(dl), len(rl))
-    alone = (rl[:n] < np.percentile(rl, 90) - ALONE_DB) & (dl[:n] > np.percentile(dl, 90) - ALONE_DB)
-    env = _onset_envelope(d)
-    runs, i = [], 0
-    while i < n:
-        if not alone[i]:
-            i += 1
-            continue
-        j = i
-        while j < n and (alone[j] or (j + 1 < n and alone[j + 1])):  # bridge a single dropped 100 ms block
-            j += 1
-        if (j - i) / 10 >= ALONE_MIN:
-            runs.append([round(i / 10, 1), round(j / 10, 1)])
-        i = j
-    return {"beats": _track_beats(env, _tempo(env)), "alone": runs}
-
-
-def beats_for(track_id: str, drums: Path, rest: Path) -> dict:
-    """Click sections of a track, computed on first use and kept next to the audio."""
-    cache = track_dir(track_id) / "beats.json"
-    try:
-        data = json.loads(cache.read_text())
-        if "beats" in data:  # an older format is recomputed
-            return data
-    except (OSError, ValueError):
-        pass
-    data = compute_beats(drums, rest)
-    tmp = cache.with_suffix(f".{uuid.uuid4().hex[:6]}.tmp")
-    tmp.write_text(json.dumps(data))
     tmp.replace(cache)
     return data
 
