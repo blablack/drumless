@@ -156,7 +156,8 @@ def set_loop(track_id: str, body: dict) -> dict:
 
 @app.post("/api/tracks/{track_id}/click")
 def set_click(track_id: str, body: dict) -> dict:
-    """Remember the click for a track: first beat (ms), tempo (BPM), number of beats, and whether it is switched on."""
+    """Remember the click for a track: first beat (ms), tempo (BPM), number of beats, whether it is switched on, and
+    which three of start/end/BPM/beats the user sets (`mode`; the page works out the fourth)."""
     meta = known(track_id)
     if meta["status"] in ("separating", "mixing"):
         raise HTTPException(409, "still processing")
@@ -164,9 +165,12 @@ def set_click(track_id: str, body: dict) -> dict:
         start, bpm, beats, on = float(body["start"]), float(body["bpm"]), int(body["beats"]), bool(body.get("on", True))
     except (KeyError, TypeError, ValueError):
         raise HTTPException(422, "need numeric start, bpm and beats")
-    if not (0 <= start < 86400000 and 20 <= bpm <= 400 and 0 <= beats <= 10000):
+    mode = body.get("mode", "start")
+    if mode not in ("start", "end", "span"):
+        raise HTTPException(422, "mode must be start, end or span")
+    if not (0 <= start < 86400000 and 20 <= bpm <= 400 and 1 <= beats <= 10000):
         raise HTTPException(422, "start, bpm or beats out of range")
-    worker.update_meta(track_id, click={"start": round(start), "bpm": round(bpm, 2), "beats": beats, "on": on})
+    worker.update_meta(track_id, click={"start": round(start), "bpm": round(bpm, 4), "beats": beats, "mode": mode, "on": on})
     return {"ok": True}
 
 

@@ -50,7 +50,9 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 #play{width:64px;height:64px;border-radius:50%;background:var(--accent);color:#fff;font-size:1.4rem}
 .skip{color:var(--text);border:1px solid var(--line)!important;border-radius:20px;padding:8px 14px}
 .loop{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:14px;font-size:.85rem;color:var(--mute);font-variant-numeric:tabular-nums}
-.loop input{width:5.5em;background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
+.loop input,.loop select{background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
+.loop select{background:var(--card)}
+.loop input{width:5.5em}.loop input:disabled{opacity:.55}
 .skip.on{background:var(--accent);border-color:var(--accent)!important;color:#fff}
 .rates{display:flex;gap:6px;align-items:center;margin-top:16px}
 .rates span{color:var(--mute);font-size:.75rem;letter-spacing:.08em;margin-right:4px}
@@ -90,9 +92,13 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
  <div class="transport"><button class="skip" id="back">⏪ 10s</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
  <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
- <div class="loop"><button class="skip" id="click" title="Click in place of the missing drums">♩ Click</button>
-  <span id="clickset" hidden><label>start <input id="cstart" type="number" min="0" step="10"> ms</label> <button id="cnow" title="Use the playhead">⌖</button>
-  <label><input id="cbpm" type="number" min="20" max="400" step="0.1"> BPM</label> <label><input id="cbeats" type="number" min="0" max="10000" step="1"> beats</label></span></div>
+ <div class="loop"><button class="skip" id="click" title="Click in place of the missing drums">♩ Click</button></div>
+ <div class="loop" id="clickset" hidden>
+  <select id="cmode" aria-label="What to set"><option value="start">start + BPM + beats</option><option value="end">end + BPM + beats</option><option value="span">start + end + beats</option></select>
+  <label>start <input id="cstart" type="number" min="0" step="10"> ms</label><button id="cstartnow" title="Use the playhead">⌖</button>
+  <label>end <input id="cend" type="number" min="0" step="10"> ms</label><button id="cendnow" title="Use the playhead">⌖</button>
+  <label><input id="cbpm" type="number" min="20" max="400" step="0.1"> BPM</label>
+  <label><input id="cbeats" type="number" min="1" max="10000" step="1"> beats</label></div>
  <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
  <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
  <audio id="audio" preload="auto"></audio>
@@ -270,17 +276,27 @@ function enforceLoop(){ // seek back from the end of the section (only just past
   if(audio.paused||dragging||!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t>=loop.b&&t<loop.b+1)audio.currentTime=loop.a;
 }
-// Click: a metronome you set by hand where the drums are missing (e.g. a drums-only intro): the first beat in ms,
-// the tempo, and how many beats to play. Saved per song.
-let click={start:0,bpm:120,beats:16,on:false},lastT=-1,ctx=null;
+// Click: a metronome you set by hand where the drums are missing (e.g. a drums-only intro). A grid is start, BPM and
+// number of beats (end = the last beat); you give any three of start/end/BPM/beats (`mode` says which) and the fourth is worked out.
+// Saved per song.
+const CLICK_DEFAULT={start:0,bpm:120,beats:32,mode:"start",on:false};
+let click={...CLICK_DEFAULT},clickEnd=0,lastT=-1,ctx=null;
+const gapMs=()=>60000/click.bpm;
 function loadClick(){
   const c=(tracks.find(t=>t.id===cur)||{}).click;
-  click=c?{start:c.start,bpm:c.bpm,beats:c.beats,on:!!c.on}:{start:0,bpm:120,beats:16,on:false};
+  click=c?{start:c.start,bpm:c.bpm,beats:c.beats,mode:c.mode||"start",on:!!c.on}:{...CLICK_DEFAULT};
   updateClickUi();
 }
 function updateClickUi(){
+  clickEnd=click.start+(click.beats-1)*gapMs();
   $("#click").classList.toggle("on",click.on);$("#clickset").hidden=!click.on;
-  $("#cstart").value=click.start;$("#cbpm").value=click.bpm;$("#cbeats").value=click.beats;
+  $("#cmode").value=click.mode;
+  $("#cstart").value=Math.round(click.start);$("#cend").value=Math.round(clickEnd);
+  $("#cbpm").value=+click.bpm.toFixed(2);$("#cbeats").value=click.beats;
+  // the one that is worked out can't be typed into
+  $("#cstart").disabled=$("#cstartnow").disabled=click.mode==="end";
+  $("#cend").disabled=$("#cendnow").disabled=click.mode==="start";
+  $("#cbpm").disabled=click.mode==="span";
 }
 function saveClick(){
   if(!cur)return;
@@ -288,9 +304,15 @@ function saveClick(){
   fetch("/api/tracks/"+cur+"/click",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(click)}).catch(()=>{});
 }
 function readClick(){
-  const s=+$("#cstart").value,b=+$("#cbpm").value,n=Math.round(+$("#cbeats").value);
-  if(s>=0&&b>=20&&b<=400&&n>=0)click={start:Math.round(s),bpm:b,beats:n,on:click.on};
-  lastT=-1;saveClick();
+  const m=$("#cmode").value,s=+$("#cstart").value,e=+$("#cend").value,b=+$("#cbpm").value,n=Math.round(+$("#cbeats").value);
+  let c=null;
+  if(n>=1&&n<=10000){
+    if(m==="start"&&s>=0&&b>=20&&b<=400)c={start:s,bpm:b,beats:n};
+    else if(m==="end"&&b>=20&&b<=400&&e-(n-1)*60000/b>=0)c={start:e-(n-1)*60000/b,bpm:b,beats:n};
+    else if(m==="span"&&n>=2&&s>=0&&e>s&&(n-1)*60000/(e-s)>=20&&(n-1)*60000/(e-s)<=400)c={start:s,bpm:(n-1)*60000/(e-s),beats:n};
+  }
+  if(c){click={...c,start:Math.round(c.start),bpm:+c.bpm.toFixed(4),mode:m,on:click.on};lastT=-1;saveClick()}
+  updateClickUi(); // an invalid entry puts the saved values back
 }
 function tick(){
   if(!click.on||audio.paused||!ctx)return;
@@ -312,8 +334,9 @@ $("#click").onclick=()=>{
   if(click.on){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}
   updateClickUi();saveClick();
 };
-["#cstart","#cbpm","#cbeats"].forEach(k=>$(k).onchange=readClick);
-$("#cnow").onclick=()=>{$("#cstart").value=Math.round(audio.currentTime*1000);readClick()};
+["#cmode","#cstart","#cend","#cbpm","#cbeats"].forEach(k=>$(k).onchange=readClick);
+$("#cstartnow").onclick=()=>{$("#cstart").value=Math.round(audio.currentTime*1000);readClick()};
+$("#cendnow").onclick=()=>{$("#cend").value=Math.round(audio.currentTime*1000);readClick()};
 function snapToLoop(){ // with the section on, playback starts inside it
   if(!loop.on||loop.a===null)return;
   const t=audio.currentTime;if(t<loop.a||t>=loop.b)audio.currentTime=loop.a;
