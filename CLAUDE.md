@@ -4,7 +4,9 @@ Drumless: FastAPI app that splits an uploaded song into stems (audio-separator +
 (stem switch, slow-down, repeat, per-song draggable loop on a zoomable waveform). See README.md.
 
 - The UI is a single inline page in `drumless_web/page.py` (raw string, no build step); there is no JS engine locally, so
-  syntax-check it with `pip install esprima` or look at it in headless Firefox against a stub server.
+  syntax-check it with `pip install esprima` or look at it in headless Firefox against a stub server (an audio clock runs there without a sound card, so the
+  player can be tested by recording the output; kill the browser by its own pid, never `pkill`).
+- Playback is WebAudio, not an `<audio>` element (`audio` in the page is our engine): the loop, click and seeks are scheduled on the context clock.
 - No database: `tracks/<id>/meta.json` plus the audio is the state. Edits from request handlers go through `worker.update_meta`
   (locked); the separation worker rewrites its own copy of meta while a track is processing, so endpoints refuse edits then (409).
 - Quality over speed: the user drums along to the output, so hours per song is fine — do not trade separation quality for time.

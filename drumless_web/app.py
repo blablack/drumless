@@ -36,6 +36,17 @@ def known(track_id: str) -> dict:
     return meta
 
 
+VENDOR = Path(__file__).parent / "vendor"
+
+
+@app.get("/vendor/{name}")
+def vendor(name: str) -> FileResponse:
+    """The bundled browser libraries (see vendor/README.md)."""
+    if name != "SignalsmithStretch.js":
+        raise HTTPException(404)
+    return FileResponse(VENDOR / name, media_type="text/javascript")
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}

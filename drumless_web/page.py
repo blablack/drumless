@@ -101,11 +101,11 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
   <label><input id="cbeats" type="number" min="1" max="10000" step="1"> beats</label></div>
  <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
  <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
- <audio id="audio" preload="auto"></audio>
 </div>
 <div id="list"></div>
 </main>
 <div id="logbar" hidden><div id="loghandle" title="Drag to resize"></div><div class="row"><span id="logname"></span><button id="logtoggle">Hide log</button></div><pre id="log"></pre></div>
+<script src="/vendor/SignalsmithStretch.js"></script>
 <script>
 const $=s=>document.querySelector(s), esc=s=>s.replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";");
 const LABEL={queued:"Queued",separating:"Separating…",mixing:"Mixing…",done:"Done",error:"Failed",cancelled:"Cancelled"};
@@ -117,8 +117,145 @@ const MIN_LOOP=0.5,MIN_VIEW=1,PPS=200; // PPS: peaks per second, as the server m
 let tracks=[],cur=null,stem="no_drums",rate=1,dragging=false,repeat=false,loop={a:null,b:null,on:false};
 let peaks=null,peakCache={},view={s:0,l:null},dirty=true,holdFollow=0; // view.l null: the whole song
 try{rate=+localStorage.getItem("rate")||1;repeat=localStorage.getItem("repeat")==="1"}catch(e){}
-const audio=$("#audio");
-audio.preservesPitch=audio.webkitPreservesPitch=true;audio.loop=repeat;
+// Playback. The song is decoded into memory and played through WebAudio, so the loop is gapless and the click runs on
+// the same clock as the music. At 100% the buffer plays as it is; slower, it goes through Signalsmith Stretch (the pitch is kept).
+// The engine keeps the song position `aPos` at context time `aOut`, advancing at `rate` and wrapping in the loop region; the
+// playhead and the click times are worked out from that, not read back from the audio nodes.
+const audio=(()=>{
+  const FADE=0.005,LEAD=0.05;
+  let ctx=null,buf=null,node=null,nodeBuf=null,nodeGain=null,kind=null,src=null,srcGain=null;
+  let playing=false,aOut=Infinity,aPos=0,gen=0,loadGen=0,loopTimer=0,seekTimer=0,seekAt=0,prepP=Promise.resolve();
+  const A={onplay:null,onpause:null,onended:null,onloadedmetadata:null,onanchor:null};
+  const context=()=>ctx||(ctx=new (window.AudioContext||window.webkitAudioContext)());
+  const region=()=>loop.on&&loop.a!==null?[loop.a,loop.b]:repeat&&buf?[0,buf.duration]:null;
+  function posAt(tc){ // the song position at context time tc
+    if(!buf)return 0;
+    if(!playing||tc<=aOut)return aPos;
+    let x=aPos+(tc-aOut)*rate;const r=region();
+    if(r&&aPos<r[1]&&x>=r[1])x=r[0]+(x-r[0])%(r[1]-r[0]);
+    return Math.min(x,buf.duration);
+  }
+  A.segments=(from,to)=>{ // [{t, p0, p1}]: from context time t the song plays from p0 to p1 (a loop gives several)
+    const out=[];if(!playing||!buf||aOut===Infinity)return out;
+    const r=region();let t=Math.max(from,aOut),p=aPos+(t-aOut)*rate;
+    if(r&&aPos<r[1]&&p>=r[1])p=r[0]+(p-r[0])%(r[1]-r[0]);
+    while(t<to){
+      const end=r&&p<r[1]?r[1]:buf.duration,tEnd=t+(end-p)/rate;
+      out.push({t,p0:p,p1:p+(Math.min(tEnd,to)-t)*rate});
+      if(!(r&&p<r[1]&&tEnd<to))break;
+      t=tEnd;p=r[0];
+    }
+    return out;
+  };
+  async function doPrepare(stretch){
+    const c=context();
+    if(c.state!=="running")await c.resume().catch(()=>{});
+    if(!stretch)return;
+    if(!node){
+      node=await SignalsmithStretch(c);
+      nodeGain=c.createGain();nodeGain.gain.value=0;node.connect(nodeGain).connect(c.destination);
+    }
+    if(nodeBuf!==buf){
+      const b=buf;nodeBuf=null;
+      await node.dropBuffers();
+      await node.addBuffers(Array.from({length:b.numberOfChannels},(_,i)=>new Float32Array(b.getChannelData(i))));
+      nodeBuf=b;
+    }
+  }
+  const prepare=s=>prepP=prepP.catch(()=>{}).then(()=>doPrepare(s)); // one at a time
+  function stopKind(k,at){ // fade the sound out from context time `at`
+    if(k==="native"&&src){
+      const s=src,g=srcGain;src=srcGain=null;
+      g.gain.cancelScheduledValues(at);g.gain.setValueAtTime(1,at);g.gain.linearRampToValueAtTime(0,at+FADE);
+      try{s.stop(at+FADE+0.01)}catch(e){}
+    }else if(k==="stretch"&&node){
+      const g=nodeGain.gain;g.cancelScheduledValues(at);g.setValueAtTime(1,at);g.linearRampToValueAtTime(0,at+FADE);
+      node.schedule({output:at+FADE,active:false});
+    }
+  }
+  async function restart(p){ // (re)start the sound at position p (default: where it is now) with the present settings
+    const my=++gen,next=rate===1?"native":"stretch";
+    try{await prepare(next==="stretch")}
+    catch(e){if(my===gen){$("#msg").textContent="Playback failed: "+(e.message||e);A.pause()}return}
+    if(my!==gen||!playing||!buf)return;
+    const c=ctx,tc=c.currentTime+LEAD;
+    let q=p===undefined?posAt(tc):p;
+    const r=region();if(loop.on&&r&&(q<r[0]||q>=r[1]))q=r[0]; // a section that is on starts inside it
+    q=Math.max(0,Math.min(q,buf.duration-0.001));
+    if(kind&&kind!==next)stopKind(kind,tc);
+    if(next==="native"){
+      if(kind==="native")stopKind("native",tc);
+      const s=c.createBufferSource(),g=c.createGain();s.buffer=buf;
+      if(r){s.loop=true;s.loopStart=r[0];s.loopEnd=r[1]}
+      g.gain.setValueAtTime(0,tc);g.gain.linearRampToValueAtTime(1,tc+FADE);
+      s.connect(g).connect(c.destination);s.start(tc,q);src=s;srcGain=g;
+    }else{
+      const g=nodeGain.gain;g.cancelScheduledValues(tc-FADE);
+      if(kind==="stretch"){g.setValueAtTime(1,tc-FADE);g.linearRampToValueAtTime(0,tc)}
+      g.setValueAtTime(0,tc);g.linearRampToValueAtTime(1,tc+FADE);
+      node.schedule({output:tc,active:true,input:q,rate,semitones:0,loopStart:r?r[0]:0,loopEnd:r?r[1]:0});
+    }
+    kind=next;aPos=q;aOut=tc;dirty=true;
+    if(A.onanchor)A.onanchor(tc);
+  }
+  function finish(){ // ran off the end
+    playing=false;aPos=buf.duration;aOut=Infinity;++gen;stopKind(kind,ctx.currentTime);kind=null;dirty=true;
+    if(A.onended)A.onended();
+  }
+  setInterval(()=>{if(playing&&buf&&aOut<Infinity&&!region()&&posAt(ctx.currentTime)>=buf.duration-0.003)finish()},25);
+  Object.defineProperties(A,{
+    paused:{get:()=>!playing},ended:{get:()=>false},
+    duration:{get:()=>buf?buf.duration:NaN},
+    currentTime:{
+      get:()=>ctx?posAt(ctx.currentTime-(ctx.outputLatency||0)):aPos,
+      set(v){
+        if(!buf)return;
+        aPos=Math.max(0,Math.min(v,buf.duration));dirty=true;
+        if(!playing)return;
+        aOut=Infinity; // the playhead stays where it was put until the sound follows
+        clearTimeout(seekTimer);seekTimer=setTimeout(()=>{seekAt=performance.now();restart(aPos)},Math.max(0,seekAt+40-performance.now()));
+      }
+    },
+  });
+  A.context=context;
+  A.play=async()=>{
+    if(!buf||playing)return;
+    if(aPos>=buf.duration-0.01)aPos=0;
+    playing=true;aOut=Infinity;dirty=true;
+    if(A.onplay)A.onplay();
+    await restart(aPos);
+  };
+  A.pause=()=>{
+    if(!playing)return;
+    const p=posAt(ctx.currentTime);++gen;clearTimeout(seekTimer);
+    stopKind(kind,ctx.currentTime);kind=null;aPos=p;aOut=Infinity;playing=false;dirty=true;
+    if(A.onpause)A.onpause();
+  };
+  A.applyLoop=()=>{ // the loop section or repeat changed: carry on in the new region
+    if(!playing||aOut===Infinity)return; // a restart is already on its way
+    clearTimeout(loopTimer);loopTimer=setTimeout(()=>restart(),60);
+  };
+  A.rateChanged=()=>{if(playing)restart()};
+  A.unload=()=>{
+    ++gen;++loadGen;clearTimeout(seekTimer);
+    if(ctx)stopKind(kind,ctx.currentTime);
+    kind=null;playing=false;buf=null;aPos=0;aOut=Infinity;nodeBuf=null;dirty=true;
+    if(node)node.dropBuffers();
+    if(A.onpause)A.onpause();
+  };
+  A.load=async(url,keep)=>{ // keep: a stem change in the same song, the position and play state stay
+    const my=++loadGen;
+    const r=await fetch(url);if(!r.ok)throw new Error("HTTP "+r.status);
+    const data=await r.arrayBuffer();if(my!==loadGen)return;
+    const b=await context().decodeAudioData(data);if(my!==loadGen)return;
+    buf=b;
+    if(keep)aPos=Math.min(aPos,b.duration);else{aPos=0;playing=false}
+    dirty=true;
+    if(A.onloadedmetadata)A.onloadedmetadata();
+    if(keep&&playing)restart();
+  };
+  return A;
+})();
 function tile(t){
   const run=t.status==="separating"||t.status==="mixing",done=t.status==="done";
   const st=done?"":LABEL[t.status]+(t.status==="queued"&&t.position?` (#${t.position})`:"")+(run?" · "+elapsed(t.started):"");
@@ -128,19 +265,18 @@ function tile(t){
    <div class="disc${done?"":" busy"}"></div><div class="tname">${esc(t.name)}</div><div class="st ${t.status}">${st}</div></div>`;
 }
 function setRate(r){
-  rate=r;audio.defaultPlaybackRate=audio.playbackRate=r;
+  rate=r;audio.rateChanged();
   document.querySelectorAll("#rates button").forEach(b=>b.classList.toggle("on",+b.dataset.rate===Math.round(r*100)));
   try{localStorage.setItem("rate",r)}catch(e){}
 }
-function showStem(keepPos){
-  const pos=audio.currentTime,was=!audio.paused;
-  audio.src=`/files/${cur}/${stem}`;
-  if(keepPos)audio.addEventListener("loadedmetadata",()=>{audio.currentTime=pos;if(was)audio.play().catch(()=>{})},{once:true});
-  else dirty=true;
+async function showStem(keepPos){
+  const id=cur,sm=stem;
   loadPeaks();
-  setRate(rate);
-  $("#pstem").textContent=STEMS[stem];
-  document.querySelectorAll("#stems button").forEach(b=>b.classList.toggle("on",b.dataset.stem===stem));
+  $("#pstem").textContent=STEMS[sm]+" · loading…";
+  document.querySelectorAll("#stems button").forEach(b=>b.classList.toggle("on",b.dataset.stem===sm));
+  try{await audio.load(`/files/${id}/${sm}`,keepPos)}
+  catch(e){if(cur===id&&stem===sm)$("#msg").textContent="Could not load "+STEMS[sm]+": "+(e.message||e)}
+  if(cur===id&&stem===sm)$("#pstem").textContent=STEMS[sm];
 }
 function select(id){
   const l=(tracks.find(t=>t.id===id)||{}).loop;
@@ -148,12 +284,12 @@ function select(id){
   cur=id;stem="no_drums";view={s:0,l:null};loadClick();
   for(const k in peakCache)if(!k.startsWith(id+"/"))delete peakCache[k];$("#player").hidden=false;
   $("#plinks").innerHTML=Object.entries(STEMS).map(([k,l])=>`<a href="/files/${id}/${k}?dl=1">${l}</a>`).join("");
-  $("#dl").open=false;showStem(false);syncPlayer();
+  $("#dl").open=false;audio.unload();showStem(false);syncPlayer();
   $("#player").scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 function syncPlayer(){
   const t=tracks.find(t=>t.id===cur);
-  if(!t){if(cur){cur=null;audio.pause();audio.removeAttribute("src");audio.load()}$("#player").hidden=true;return}
+  if(!t){if(cur){cur=null;audio.unload()}$("#player").hidden=true;return}
   $("#pname").textContent=t.name;$("#pdisc").style.setProperty("--h",hue(t.name));
 }
 const dur=()=>isFinite(audio.duration)?audio.duration:(peaks?peaks.length/PPS:0);
@@ -282,32 +418,11 @@ audio.onloadedmetadata=()=>{
   if(loop.a!==null&&isFinite(d)){loop.b=Math.min(loop.b,d);loop.a=Math.max(0,Math.min(loop.a,loop.b-MIN_LOOP));updateLoopUi()}
   dirty=true;
 };
-audio.ontimeupdate=()=>{dirty=true;enforceLoop()};
-audio.addEventListener("ended",()=>{if(loop.on&&loop.a!==null&&!dragging){audio.currentTime=loop.a;audio.play().catch(()=>{})}});
-// Going back from the end of the section. A coarse poll overshoots the end by up to its period, and the seek itself takes
-// a moment to start sounding again, which stretches every pass. So: poll finely, fire a precise timer just before the end,
-// and issue the seek early by the delay measured on the previous jumps. Only just past the end counts (seeking further on leaves the loop).
-let seekLat=0,seekAt=0,armed=0;
-function jumpBack(){seekAt=performance.now();audio.currentTime=loop.a}
-function enforceLoop(){
-  if(audio.paused||dragging||!loop.on||loop.a===null)return;
-  const t=audio.currentTime;
-  if(seekAt&&t>loop.a+0.001){ // sounding again: how long the seek took, in real time
-    if(t<loop.a+0.5)seekLat=Math.min(0.06,0.7*seekLat+0.3*(performance.now()-seekAt)/1000);
-    seekAt=0;
-  }
-  if(t>=loop.b&&t<loop.b+1){jumpBack();return}
-  const wait=(loop.b-t)/rate*1000-seekLat*1000;
-  if(!armed&&t<loop.b&&wait<30)armed=setTimeout(()=>{
-    armed=0;if(audio.paused||dragging||!loop.on||loop.a===null)return;
-    const u=audio.currentTime;if(u<loop.b&&loop.b-u<0.1*rate+0.05)jumpBack();
-  },Math.max(0,wait));
-}
 // Click: a metronome you set by hand where the drums are missing (e.g. a drums-only intro). A grid is start, BPM and
 // number of beats (end = the last beat); you give any three of start/end/BPM/beats (`mode` says which) and the fourth is worked out.
 // Saved per song.
 const CLICK_DEFAULT={start:0,bpm:120,beats:32,mode:"start",on:false};
-let click={...CLICK_DEFAULT},clickEnd=0,lastT=-1,ctx=null;
+let click={...CLICK_DEFAULT},clickEnd=0,clickLast=0,clickNodes=[];
 const gapMs=()=>60000/click.bpm;
 function loadClick(){
   const c=(tracks.find(t=>t.id===cur)||{}).click;
@@ -338,27 +453,36 @@ function readClick(){
     else if(m==="end"&&b>=20&&b<=400&&e-(n-1)*60000/b>=0)c={start:e-(n-1)*60000/b,bpm:b,beats:n};
     else if(m==="span"&&n>=2&&s>=0&&e>s&&(n-1)*60000/(e-s)>=20&&(n-1)*60000/(e-s)<=400)c={start:s,bpm:(n-1)*60000/(e-s),beats:n};
   }
-  if(c){click={...c,start:Math.round(c.start),bpm:+c.bpm.toFixed(4),mode:m,on:click.on};lastT=-1;saveClick()}
+  if(c){click={...c,start:Math.round(c.start),bpm:+c.bpm.toFixed(4),mode:m,on:click.on};saveClick()}
   updateClickUi(); // an invalid entry puts the saved values back
 }
+// The click is scheduled on the engine's clock: for the stretch of song about to sound (the loop's passes included),
+// every beat that falls in it is started at the moment that position plays.
+const CLICK_LOOK=0.15;
+audio.onanchor=tc=>{ // the sound was repositioned: forget the clicks scheduled after it, start over from here
+  clickLast=tc;clickNodes=clickNodes.filter(n=>{if(n.when<=tc)return true;try{n.g.disconnect()}catch(e){}return false});
+};
 function tick(){
-  if(!click.on||audio.paused||!ctx)return;
-  const t=audio.currentTime,ahead=0.15*rate,gap=60/click.bpm,s0=click.start/1000;
-  if(lastT>t+ahead+0.2||lastT<t-1)lastT=t-0.001; // seeked or looped
-  for(let i=Math.max(0,Math.ceil((lastT-s0)/gap-1e-9));i<click.beats;i++){
-    const at=s0+i*gap;if(at>=t+ahead)break;
-    if(at<=lastT)continue;
-    lastT=at;if(at<t-0.02)continue;
-    const when=ctx.currentTime+(at-t)/rate;
-    const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=1500;
-    g.gain.setValueAtTime(0.0001,when);g.gain.exponentialRampToValueAtTime(0.5,when+0.002);g.gain.exponentialRampToValueAtTime(0.0001,when+0.06);
-    o.connect(g).connect(ctx.destination);o.start(when);o.stop(when+0.07);
+  if(!click.on||audio.paused)return;
+  const c=audio.context(),now=c.currentTime,to=now+CLICK_LOOK,from=Math.max(clickLast,now);
+  clickNodes=clickNodes.filter(n=>n.when>now-0.1);
+  if(to<=from)return;
+  clickLast=to;
+  const gap=60/click.bpm,s0=click.start/1000;
+  for(const sg of audio.segments(from,to)){
+    for(let i=Math.max(0,Math.ceil((sg.p0-s0)/gap-1e-9));i<click.beats;i++){
+      const sp=s0+i*gap;if(sp>=sg.p1)break;
+      const when=sg.t+(sp-sg.p0)/rate;
+      const o=c.createOscillator(),g=c.createGain();o.frequency.value=1500;
+      g.gain.setValueAtTime(0.0001,when);g.gain.exponentialRampToValueAtTime(0.5,when+0.002);g.gain.exponentialRampToValueAtTime(0.0001,when+0.06);
+      o.connect(g).connect(c.destination);o.start(when);o.stop(when+0.07);clickNodes.push({when,g});
+    }
   }
 }
 setInterval(tick,25);
 $("#click").onclick=()=>{
   click.on=!click.on;
-  if(click.on){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}
+  if(click.on)audio.context().resume();
   updateClickUi();saveClick();
 };
 ["#cmode","#cstart","#cend","#cbpm","#cbeats"].forEach(k=>$(k).onchange=readClick);
@@ -369,9 +493,7 @@ function snapToLoop(){ // with the section on, playback starts inside it
   const t=audio.currentTime;if(t<loop.a||t>=loop.b)audio.currentTime=loop.a;
 }
 audio.onplay=audio.onpause=audio.onended=()=>{
-  if(!audio.paused)snapToLoop();
-  if(!audio.paused&&click.on){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}
-  const p=!audio.paused&&!audio.ended;
+  const p=!audio.paused;
   document.body.classList.toggle("playing",p);
   $("#play").textContent=p?"❚❚":"▶";$("#play").setAttribute("aria-label",p?"Pause":"Play");
 };
@@ -452,7 +574,7 @@ $("#pren").onclick=async()=>{
 };
 $("#stems").onclick=e=>{const k=e.target.dataset.stem;if(k&&k!==stem){stem=k;showStem(true)}};
 $("#rates").onclick=e=>{const r=e.target.dataset.rate;if(r)setRate(r/100)};
-$("#play").onclick=()=>audio.paused?audio.play().catch(()=>{}):audio.pause();
+$("#play").onclick=()=>audio.paused?audio.play():audio.pause();
 $("#stop").onclick=()=>{audio.pause();audio.currentTime=0};
 $("#back").onclick=()=>{audio.currentTime=Math.max(0,audio.currentTime-10)};
 $("#fwd").onclick=()=>{audio.currentTime=Math.min(audio.duration||1e9,audio.currentTime+10)};
@@ -485,7 +607,7 @@ wave.onpointermove=e=>{
   if(g.mode==="a"||g.mode==="b"){
     const t=Math.max(0,Math.min(v.d,v.s+(p.x+g.off)/p.W*v.l));
     if(g.mode==="a")loop.a=Math.min(t,loop.b-MIN_LOOP);else loop.b=Math.max(t,loop.a+MIN_LOOP);
-    dirty=true;updateLoopUi();
+    dirty=true;updateLoopUi();audio.applyLoop();
   }else if(g.mode==="pan"){setView(v.s-(p.x-g.lastX)/p.W*v.l,view.l);g.lastX=p.x}
   else if(g.mode==="seek")audio.currentTime=timeAtX(p.x);
 };
@@ -521,14 +643,12 @@ $("#loopsec").onclick=()=>{
     }
     loop.on=true;snapToLoop();
   }
-  updateLoopUi();dirty=true;saveLoop();
+  updateLoopUi();dirty=true;saveLoop();audio.applyLoop();
 };
 $("#repeat").onclick=()=>{
-  repeat=audio.loop=!repeat;updateLoopUi();
+  repeat=!repeat;updateLoopUi();audio.applyLoop();
   try{localStorage.setItem("repeat",repeat?"1":"0")}catch(e){}
 };
-// timeupdate only fires ~4x/s; poll finely so the loop point is hit accurately.
-setInterval(enforceLoop,5);
 $("#plinks").onclick=()=>{$("#dl").open=false};
 document.addEventListener("keydown",e=>{
   if(e.code==="Space"&&cur&&!["INPUT","BUTTON","SUMMARY","TEXTAREA"].includes(e.target.tagName)){e.preventDefault();$("#play").click()}
