@@ -284,9 +284,24 @@ audio.onloadedmetadata=()=>{
 };
 audio.ontimeupdate=()=>{dirty=true;enforceLoop()};
 audio.addEventListener("ended",()=>{if(loop.on&&loop.a!==null&&!dragging){audio.currentTime=loop.a;audio.play().catch(()=>{})}});
-function enforceLoop(){ // seek back from the end of the section (only just past it: seeking further on leaves the loop)
+// Going back from the end of the section. A coarse poll overshoots the end by up to its period, and the seek itself takes
+// a moment to start sounding again, which stretches every pass. So: poll finely, fire a precise timer just before the end,
+// and issue the seek early by the delay measured on the previous jumps. Only just past the end counts (seeking further on leaves the loop).
+let seekLat=0,seekAt=0,armed=0;
+function jumpBack(){seekAt=performance.now();audio.currentTime=loop.a}
+function enforceLoop(){
   if(audio.paused||dragging||!loop.on||loop.a===null)return;
-  const t=audio.currentTime;if(t>=loop.b&&t<loop.b+1)audio.currentTime=loop.a;
+  const t=audio.currentTime;
+  if(seekAt&&t>loop.a+0.001){ // sounding again: how long the seek took, in real time
+    if(t<loop.a+0.5)seekLat=Math.min(0.06,0.7*seekLat+0.3*(performance.now()-seekAt)/1000);
+    seekAt=0;
+  }
+  if(t>=loop.b&&t<loop.b+1){jumpBack();return}
+  const wait=(loop.b-t)/rate*1000-seekLat*1000;
+  if(!armed&&t<loop.b&&wait<30)armed=setTimeout(()=>{
+    armed=0;if(audio.paused||dragging||!loop.on||loop.a===null)return;
+    const u=audio.currentTime;if(u<loop.b&&loop.b-u<0.1*rate+0.05)jumpBack();
+  },Math.max(0,wait));
 }
 // Click: a metronome you set by hand where the drums are missing (e.g. a drums-only intro). A grid is start, BPM and
 // number of beats (end = the last beat); you give any three of start/end/BPM/beats (`mode` says which) and the fourth is worked out.
@@ -512,8 +527,8 @@ $("#repeat").onclick=()=>{
   repeat=audio.loop=!repeat;updateLoopUi();
   try{localStorage.setItem("repeat",repeat?"1":"0")}catch(e){}
 };
-// timeupdate only fires ~4x/s; poll faster so the loop point is hit accurately.
-setInterval(enforceLoop,30);
+// timeupdate only fires ~4x/s; poll finely so the loop point is hit accurately.
+setInterval(enforceLoop,5);
 $("#plinks").onclick=()=>{$("#dl").open=false};
 document.addEventListener("keydown",e=>{
   if(e.code==="Space"&&cur&&!["INPUT","BUTTON","SUMMARY","TEXTAREA"].includes(e.target.tagName)){e.preventDefault();$("#play").click()}
