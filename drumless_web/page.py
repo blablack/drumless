@@ -6,7 +6,7 @@ PAGE = r"""<!doctype html>
 @media(prefers-color-scheme:dark){:root{--bg:#131313;--card:#2b2b2b;--text:#eaeaea;--mute:#999;--line:#404040;--accent:#5a95f5;--err:#ff7b6b;--ok:#6fcf7a}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,sans-serif}
-main{max-width:760px;margin:0 auto;padding:16px}
+main{max-width:760px;margin:0 auto;padding:16px 16px 120px}
 h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 .card{background:var(--card);border-radius:8px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px #0002}
 #drop{border:2px dashed var(--line);text-align:center;padding:28px 12px;cursor:pointer}
@@ -30,7 +30,7 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 .tile .st{margin-top:2px;text-align:center}
 .x{position:absolute;top:4px;right:6px;color:var(--mute);font-size:.9rem;padding:2px 4px}
 #player .head{display:flex;gap:14px;align-items:center}
-#pdisc{width:64px;flex:none}
+#pdisc{width:44px;flex:none}
 .tt{flex:1;min-width:0}
 .ptitle{font-size:1.15rem;font-weight:700;overflow-wrap:anywhere}
 .pstem{color:var(--mute);font-size:.85rem}
@@ -46,22 +46,37 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 #wave{height:136px;margin-top:6px;cursor:pointer}
 #ovw{height:34px;margin-top:6px;cursor:pointer}
 #ovw[hidden]{display:none}
-.transport{display:flex;justify-content:center;align-items:center;gap:clamp(8px,3vw,28px);margin-top:8px}
-#play{flex:none;width:64px;height:64px;aspect-ratio:1;border-radius:50%;background:var(--accent);color:#fff;font-size:1.4rem}
+#play{flex:none;width:68px;height:68px;aspect-ratio:1;border-radius:50%;background:var(--accent);color:#fff;font-size:1.5rem}
 .skip{color:var(--text);border:1px solid var(--line)!important;border-radius:20px;padding:8px 14px}
 .loop{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:14px;font-size:.85rem;color:var(--mute);font-variant-numeric:tabular-nums}
 .loop input,.loop select{background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
 .loop select{background:var(--card)}
 .loop input{width:5.5em}.loop input:disabled{opacity:.55}
 .skip.on{background:var(--accent);border-color:var(--accent)!important;color:#fff}
-.rates{display:flex;gap:6px;align-items:center;margin-top:16px}
-.rates span{color:var(--mute);font-size:.75rem;letter-spacing:.08em;margin-right:4px}
-.rates button{flex:1;border:1px solid var(--line);border-radius:6px;padding:8px 0;color:var(--text);font-weight:600}
-.rates button.on{background:var(--accent);border-color:var(--accent);color:#fff}
-.seg button:hover,.rates button:hover,#play:hover,.skip:hover{text-decoration:none}
+.seg button:hover,.rates button:hover,#play:hover,.skip:hover,.round:hover{text-decoration:none}
 #play:hover{filter:brightness(1.12)}
-#dl{margin-top:14px;font-size:.9rem}#dl summary{color:var(--accent);cursor:pointer}
-#dl .links{flex-direction:column;gap:6px}
+.round{flex:none;width:48px;height:48px;border-radius:50%;border:1px solid var(--line);background:var(--card);color:var(--text);font-weight:700;font-size:.85rem;display:flex;align-items:center;justify-content:center}
+.round.on{background:var(--accent);border-color:var(--accent);color:#fff}
+#pmenu{font-size:1.3rem;margin-left:auto}
+#bar{position:fixed;left:0;right:0;bottom:var(--logh,0px);z-index:40;background:var(--card);box-shadow:0 -1px 4px #0003;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+#bar>div{max-width:760px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:4px}
+#scrim{position:fixed;inset:0;z-index:20;background:#0006;opacity:0;pointer-events:none;transition:opacity .2s}
+#scrim.open{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:calc(var(--logh,0px) + 92px + env(safe-area-inset-bottom));z-index:30;max-width:760px;margin:0 auto;background:var(--card);border-radius:18px 18px 0 0;padding:10px 16px 16px;box-shadow:0 -2px 10px #0004;max-height:60vh;overflow:auto;transform:translateY(130%);visibility:hidden;transition:transform .2s,visibility 0s .2s}
+.sheet.open{transform:none;visibility:visible;transition:transform .2s}
+.sheet .grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
+.sheet h2{font-size:1rem;margin:0}
+.sheet .between{display:flex;align-items:center;justify-content:space-between}
+.sheet .row2{display:flex;gap:10px;align-items:flex-end;margin-top:12px}
+.sheet label{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:.75rem;font-weight:600;color:var(--mute)}
+.sheet input,.sheet select{min-height:44px;width:100%;border:1px solid var(--line);border-radius:8px;padding:0 10px;font:600 1rem system-ui,sans-serif;color:var(--text);background:var(--card)}
+.sheet input:disabled{opacity:.55}
+.sheet .now{flex:none;width:44px;height:44px;border:1px solid var(--line);border-radius:8px}
+.sheet .act{text-align:left;font-size:1rem;padding:12px 0}
+.sheet .rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.sheet .rates button{border:1px solid var(--line);border-radius:10px;min-height:48px;font-weight:700;color:var(--text)}
+.sheet .rates button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+#plinks{display:flex;flex-direction:column;gap:2px}#plinks a{padding:10px 0}
 @keyframes spin{to{transform:rotate(360deg)}}
 body.playing #pdisc{animation:spin 4s linear infinite}
 #player{border:2px solid var(--accent)}
@@ -69,7 +84,7 @@ a,button{color:var(--accent);background:none;border:0;font:inherit;cursor:pointe
 a:hover,button:hover{text-decoration:underline}
 .links{display:flex;gap:14px;margin-top:8px;flex-wrap:wrap;font-size:.9rem}
 .err{color:var(--err);font-size:.85rem;overflow-wrap:anywhere}
-#logbar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -2px 6px #0002}
+#logbar{z-index:50;position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -2px 6px #0002}
 #logbar[hidden]{display:none}
 #logbar .row{max-width:760px;margin:0 auto;padding:6px 16px;font-size:.85rem}
 #logbar .row span{color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -86,22 +101,38 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
 <div class="card" id="player" hidden>
  <div class="head"><div class="disc" id="pdisc"></div>
   <div class="tt"><div class="ptitle" id="pname"></div><div class="pstem" id="pstem"></div></div>
-  <span class="acts"><button id="pren">Rename</button><button id="pdel">Delete</button></span></div>
+  <button class="round" id="pmenu" aria-label="Track menu: rename, delete, download">⋯</button></div>
  <div class="seg" id="stems"><button data-stem="no_drums">Without drums</button><button data-stem="drums">Drums only</button><button data-stem="original">Original</button></div>
  <div class="wavehead"><span id="time">0:00 / 0:00</span><span class="zoom"><button id="zout" aria-label="Zoom out">−</button><button id="zin" aria-label="Zoom in">+</button><button id="zfit" title="Show the whole song">Fit</button><button id="zloop" title="Zoom to the loop section">Loop</button></span></div>
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
- <div class="transport"><button class="skip" id="back">⏪ 10s</button><button class="skip" id="stop" aria-label="Stop" title="Stop and go back to the beginning">⏹</button><button id="play" aria-label="Play">▶</button><button class="skip" id="fwd">10s ⏩</button></div>
  <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
- <div class="loop"><button class="skip" id="click" title="Click in place of the missing drums">♩ Click</button></div>
- <div class="loop" id="clickset" hidden>
-  <select id="cmode" aria-label="What to set"><option value="start">start + BPM + beats</option><option value="end">end + BPM + beats</option><option value="span">start + end + beats</option></select>
-  <label>start <input id="cstart" type="number" min="0" step="10"> ms</label><button id="cstartnow" title="Use the playhead">⌖</button>
-  <label>end <input id="cend" type="number" min="0" step="10"> ms</label><button id="cendnow" title="Use the playhead">⌖</button>
-  <label><input id="cbpm" type="number" min="20" max="400" step="0.1"> BPM</label>
-  <label><input id="cbeats" type="number" min="1" max="10000" step="1"> beats</label>
-  <label title="Beats of click before the music when you press play (0: none)">count-in <input id="ccount" type="number" min="0" max="16" step="1"> beats</label></div>
- <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
- <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
+
+ <div id="bar"><div>
+  <button class="round" id="back" aria-label="Back 10 seconds">−10</button>
+  <button class="round" id="stop" aria-label="Stop" title="Stop and go back to the beginning">⏹</button>
+  <button id="play" aria-label="Play">▶</button>
+  <button class="round" id="fwd" aria-label="Forward 10 seconds">+10</button>
+  <button class="round" id="speedbtn" aria-label="Speed">100%</button>
+  <button class="round" id="clickbtn" aria-label="Click settings">♩</button>
+ </div></div>
+ <div id="scrim"></div>
+
+ <div class="sheet" id="tracksheet"><div class="grab"></div><h2>Track</h2>
+  <div class="links" style="flex-direction:column;gap:2px"><button class="act" id="pren">Rename</button><button class="act" id="pdel">Delete</button><span class="st" style="margin-top:8px">Download</span><span class="links" id="plinks"></span></div></div>
+
+ <div class="sheet" id="speedsheet"><div class="grab"></div><h2>Speed</h2>
+  <div class="rates" id="rates"><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div></div>
+
+ <div class="sheet" id="clicksheet"><div class="grab"></div>
+  <div class="between"><h2>Click</h2><button class="skip" id="click" title="Click in place of the missing drums">Off</button></div>
+  <div id="clickset" hidden>
+   <div class="row2"><select id="cmode" aria-label="What to set"><option value="start">start + BPM + beats</option><option value="end">end + BPM + beats</option><option value="span">start + end + beats</option></select></div>
+   <div class="row2"><label>start (ms)<input id="cstart" type="number" min="0" step="10"></label><button class="now" id="cstartnow" title="Use the playhead" aria-label="Use the playhead as start">⌖</button>
+    <label>end (ms)<input id="cend" type="number" min="0" step="10"></label><button class="now" id="cendnow" title="Use the playhead" aria-label="Use the playhead as end">⌖</button></div>
+   <div class="row2"><label>BPM<input id="cbpm" type="number" min="20" max="400" step="0.1"></label>
+    <label>beats<input id="cbeats" type="number" min="1" max="10000" step="1"></label>
+    <label title="Beats of click before the music when you press play (0: none)">count-in<input id="ccount" type="number" min="0" max="16" step="1"></label></div>
+  </div></div>
 </div>
 <div id="list"></div>
 </main>
@@ -273,6 +304,7 @@ function tile(t){
 }
 function setRate(r){
   rate=r;audio.rateChanged();
+  $("#speedbtn").textContent=Math.round(r*100)+"%";$("#speedbtn").classList.toggle("on",Math.round(r*100)!==100);
   document.querySelectorAll("#rates button").forEach(b=>b.classList.toggle("on",+b.dataset.rate===Math.round(r*100)));
   try{localStorage.setItem("rate",r)}catch(e){}
 }
@@ -291,7 +323,7 @@ function select(id){
   cur=id;stem="no_drums";view={s:0,l:null};loadClick();
   for(const k in peakCache)if(!k.startsWith(id+"/"))delete peakCache[k];$("#player").hidden=false;
   $("#plinks").innerHTML=Object.entries(STEMS).map(([k,l])=>`<a href="/files/${id}/${k}?dl=1">${l}</a>`).join("");
-  $("#dl").open=false;audio.unload();showStem(false);syncPlayer();
+  closeSheets();audio.unload();showStem(false);syncPlayer();
   $("#player").scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 function syncPlayer(){
@@ -438,7 +470,7 @@ function loadClick(){
 }
 function updateClickUi(){
   clickEnd=click.start+(click.beats-1)*gapMs();
-  dirty=true;$("#click").classList.toggle("on",click.on);$("#clickset").hidden=!click.on;
+  dirty=true;$("#click").classList.toggle("on",click.on);$("#clickbtn").classList.toggle("on",click.on);$("#click").textContent=click.on?"On":"Off";$("#clickset").hidden=!click.on;
   $("#cmode").value=click.mode;
   $("#cstart").value=Math.round(click.start);$("#cend").value=Math.round(clickEnd);
   $("#cbpm").value=+click.bpm.toFixed(2);$("#cbeats").value=click.beats;$("#ccount").value=click.countin;
@@ -518,7 +550,7 @@ async function refreshLog(){
     const bar=$("#logbar"),pre=$("#log");
     bar.hidden=!d.id;
     // Leave room at the bottom of the page so the panel never covers the last card.
-    document.body.style.paddingBottom=d.id?bar.offsetHeight+"px":"";
+    setPad(d.id?bar.offsetHeight:0);
     if(!d.id)return;
     $("#logname").textContent="Log · "+d.name;
     const stick=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-24;
@@ -529,10 +561,11 @@ async function refreshLog(){
 }
 // Drag the handle on the panel's top edge to resize the log; the height is remembered.
 const logH=()=>$("#log").getBoundingClientRect().height;
+const setPad=px=>{document.body.style.paddingBottom=px?px+"px":"";document.body.style.setProperty("--logh",(px||0)+"px")};
 function setLogH(px){
   px=Math.max(60,Math.min(px,innerHeight*0.8));
   $("#log").style.height=px+"px";
-  document.body.style.paddingBottom=$("#logbar").offsetHeight+"px";
+  setPad($("#logbar").offsetHeight);
   return px;
 }
 try{const h=+localStorage.getItem("logH");if(h)setLogH(h)}catch(e){}
@@ -548,7 +581,7 @@ $("#loghandle").onpointerdown=e=>{
 $("#logtoggle").onclick=()=>{
   const bar=$("#logbar");bar.classList.toggle("min");
   $("#logtoggle").textContent=bar.classList.contains("min")?"Show log":"Hide log";
-  document.body.style.paddingBottom=bar.offsetHeight+"px";
+  setPad(bar.offsetHeight);
 };
 async function upload(files){
   for(const f of files){
@@ -578,8 +611,9 @@ $("#list").onclick=async e=>{
   const row=e.target.closest(".pick");
   if(row&&row.dataset.id!==cur){select(row.dataset.id);refresh.sig=null;refresh()}
 };
-$("#pdel").onclick=()=>del(cur);
+$("#pdel").onclick=()=>{closeSheets();del(cur)};
 $("#pren").onclick=async()=>{
+  closeSheets();
   const t=tracks.find(t=>t.id===cur);if(!t)return;
   const n=prompt("Rename track",t.name);
   if(!n||!n.trim()||n.trim()===t.name)return;
@@ -588,7 +622,7 @@ $("#pren").onclick=async()=>{
   refresh.sig=null;refresh();
 };
 $("#stems").onclick=e=>{const k=e.target.dataset.stem;if(k&&k!==stem){stem=k;showStem(true)}};
-$("#rates").onclick=e=>{const r=e.target.dataset.rate;if(r)setRate(r/100)};
+$("#rates").onclick=e=>{const r=e.target.dataset.rate;if(r){setRate(r/100);closeSheets()}};
 $("#play").onclick=()=>audio.paused?audio.play():audio.pause();
 $("#stop").onclick=()=>{audio.pause();audio.currentTime=0};
 $("#back").onclick=()=>{audio.currentTime=Math.max(0,audio.currentTime-10)};
@@ -664,8 +698,16 @@ $("#repeat").onclick=()=>{
   repeat=!repeat;updateLoopUi();audio.applyLoop();
   try{localStorage.setItem("repeat",repeat?"1":"0")}catch(e){}
 };
-$("#plinks").onclick=()=>{$("#dl").open=false};
+$("#plinks").onclick=closeSheets;
+// Bottom sheets (track menu, speed, click) over a dimmed page; the transport bar stays in reach below them.
+function openSheet(id){closeSheets();$("#"+id).classList.add("open");$("#scrim").classList.add("open")}
+function closeSheets(){document.querySelectorAll(".sheet.open").forEach(s=>s.classList.remove("open"));$("#scrim").classList.remove("open")}
+$("#scrim").onclick=closeSheets;
+$("#pmenu").onclick=()=>openSheet("tracksheet");
+$("#speedbtn").onclick=()=>openSheet("speedsheet");
+$("#clickbtn").onclick=()=>openSheet("clicksheet");
 document.addEventListener("keydown",e=>{
+  if(e.key==="Escape")closeSheets();
   if(e.code==="Space"&&cur&&!["INPUT","BUTTON","SUMMARY","TEXTAREA"].includes(e.target.tagName)){e.preventDefault();$("#play").click()}
 });
 setRate(rate);updateLoopUi();updateClickUi();
