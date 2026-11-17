@@ -46,8 +46,8 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 #wave{height:136px;margin-top:6px;cursor:pointer}
 #ovw{height:34px;margin-top:6px;cursor:pointer}
 #ovw[hidden]{display:none}
-.transport{display:flex;justify-content:center;align-items:center;gap:28px;margin-top:8px}
-#play{width:64px;height:64px;border-radius:50%;background:var(--accent);color:#fff;font-size:1.4rem}
+.transport{display:flex;justify-content:center;align-items:center;gap:clamp(8px,3vw,28px);margin-top:8px}
+#play{flex:none;width:64px;height:64px;aspect-ratio:1;border-radius:50%;background:var(--accent);color:#fff;font-size:1.4rem}
 .skip{color:var(--text);border:1px solid var(--line)!important;border-radius:20px;padding:8px 14px}
 .loop{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:14px;font-size:.85rem;color:var(--mute);font-variant-numeric:tabular-nums}
 .loop input,.loop select{background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
