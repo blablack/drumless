@@ -52,6 +52,10 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 .loop input,.loop select{background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
 .loop select{background:var(--card)}
 .loop input{width:5.5em}.loop input:disabled{opacity:.55}
+.skip.sel{border-color:var(--accent)!important;color:var(--accent)}
+.skip.on i{box-shadow:0 0 0 2px #fff}
+.skip i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+#loopchips{display:contents}
 .skip.on{background:var(--accent);border-color:var(--accent)!important;color:#fff}
 .seg button:hover,.rates button:hover,#play:hover,.skip:hover,.round:hover{text-decoration:none}
 #play:hover{filter:brightness(1.12)}
@@ -105,7 +109,8 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
  <div class="seg" id="stems"><button data-stem="no_drums">Without drums</button><button data-stem="drums">Drums only</button><button data-stem="original">Original</button></div>
  <div class="wavehead"><span id="time">0:00 / 0:00</span><span class="zoom"><button id="zout" aria-label="Zoom out">−</button><button id="zin" aria-label="Zoom in">+</button><button id="zfit" title="Show the whole song">Fit</button><button id="zloop" title="Zoom to the loop section">Loop</button></span></div>
  <canvas id="wave"></canvas><canvas id="ovw" hidden></canvas>
- <div class="loop"><button class="skip" id="repeat">⟳ Repeat track</button><button class="skip" id="loopsec">⇔ Loop section</button><span id="looptxt"></span></div>
+ <div class="loop"><span id="loopchips"></span><button class="skip" id="repeat">⟳ Repeat</button></div>
+ <div class="loop" id="loopinfo" hidden><span id="looptxt"></span><button id="lren">Rename</button><button id="ldel">Delete</button></div>
 
  <div id="bar"><div>
   <button class="round" id="back" aria-label="Back 10 seconds">−10</button>
@@ -146,7 +151,7 @@ const STEMS={no_drums:"Without drums",drums:"Drums only",original:"Original"};
 const fmt=x=>{if(!isFinite(x))return"0:00";x=Math.floor(x);return Math.floor(x/60)+":"+String(x%60).padStart(2,"0")};
 const hue=n=>{let h=0;for(const c of n)h=(h*31+c.charCodeAt(0))%360;return h};
 const MIN_LOOP=0.5,MIN_VIEW=1,PPS=200; // PPS: peaks per second, as the server makes them
-let tracks=[],cur=null,stem="no_drums",rate=1,dragging=false,repeat=false,loop={a:null,b:null,on:false};
+let tracks=[],cur=null,stem="no_drums",rate=1,dragging=false,repeat=false,loop={a:null,b:null,on:false},loops=[],sel=null; // loop: the selected section (a, b, and whether it is looping); loops: all the saved ones
 let peaks=null,peakCache={},view={s:0,l:null},dirty=true,holdFollow=0; // view.l null: the whole song
 try{rate=+localStorage.getItem("rate")||1;repeat=localStorage.getItem("repeat")==="1"}catch(e){}
 // Playback. The song is decoded into memory and played through WebAudio, so the loop is gapless and the click runs on
@@ -318,8 +323,7 @@ async function showStem(keepPos){
   if(cur===id&&stem===sm)$("#pstem").textContent=STEMS[sm];
 }
 function select(id){
-  const l=(tracks.find(t=>t.id===id)||{}).loop;
-  loop=l?{a:l.a,b:l.b,on:!!l.on}:{a:null,b:null,on:false};updateLoopUi();
+  loadLoops(tracks.find(t=>t.id===id));updateLoopUi();
   cur=id;stem="no_drums";view={s:0,l:null};loadClick();
   for(const k in peakCache)if(!k.startsWith(id+"/"))delete peakCache[k];$("#player").hidden=false;
   $("#plinks").innerHTML=Object.entries(STEMS).map(([k,l])=>`<a href="/files/${id}/${k}?dl=1">${l}</a>`).join("");
@@ -367,6 +371,14 @@ function drawWave(){
   const xOf=t=>(t-s)/l*W,on=loop.on&&loop.a!==null,xa=on?xOf(loop.a):0,xb=on?xOf(loop.b):0;
   const Hw=H-16,mid=Hw/2;
   if(on){c.fillStyle=acc;c.globalAlpha=.14;const x0=Math.max(0,xa);c.fillRect(x0,0,Math.min(W,xb)-x0,Hw);c.globalAlpha=1}
+  c.font="600 11px system-ui,sans-serif";
+  loops.forEach((x,i)=>{ // the saved sections, named; the one that is looping is drawn above in the accent colour
+    const a=x.id===sel?loop.a:x.a,b=x.id===sel?loop.b:x.b,x0=xOf(a),x1=xOf(b);
+    if(x1<0||x0>W)return;
+    const f=Math.max(0,x0),w=Math.min(W,x1)-f,col=loopColor(i);
+    if(!(x.id===sel&&on)){c.fillStyle=col;c.globalAlpha=.16;c.fillRect(f,0,w,Hw);c.globalAlpha=1}
+    c.save();c.beginPath();c.rect(f,0,w,Hw);c.clip();c.fillStyle=x.id===sel&&on?acc:col;c.fillText(x.name,f+4,12);c.restore();
+  });
   const n=Math.max(1,Math.floor(W/2.5)),cw=W/n;c.lineWidth=cw*0.7;c.lineCap="butt";
   if(!peaks){c.strokeStyle=line;c.lineWidth=2;c.beginPath();c.moveTo(0,mid);c.lineTo(W,mid);c.stroke()}
   else for(let i=0;i<n;i++){
@@ -407,6 +419,7 @@ function drawOvw(){
     ovBars={src:peaks,n,v:Array.from({length:n},(_,i)=>colMax(peaks,i*d/n,(i+1)*d/n))};
   }
   const x0=d?s/d*W:0,x1=d?(s+l)/d*W:W,on=loop.on&&loop.a!==null;
+  loops.forEach((x,i)=>{if(x.id===sel&&on)return;const a=x.id===sel?loop.a:x.a,b=x.id===sel?loop.b:x.b;c.fillStyle=loopColor(i);c.globalAlpha=.2;c.fillRect(a/d*W,0,(b-a)/d*W,H);c.globalAlpha=1});
   if(on){c.fillStyle=acc;c.globalAlpha=.2;c.fillRect(loop.a/d*W,0,(loop.b-loop.a)/d*W,H);c.globalAlpha=1}
   c.lineWidth=cw*0.7;c.strokeStyle=mute;
   if(ovBars)ovBars.v.forEach((m,i)=>{const x=(i+.5)*cw,h=Math.max(1,m*mid);c.beginPath();c.moveTo(x,mid-h);c.lineTo(x,mid+h);c.stroke()});
@@ -430,15 +443,29 @@ function frame(){
 requestAnimationFrame(frame);
 new ResizeObserver(()=>{dirty=true}).observe(wave);
 matchMedia("(prefers-color-scheme:dark)").addEventListener("change",()=>{dirty=true});
+const loopColor=i=>`hsl(${(i*67+215)%360} 65% 50%)`;
+function loadLoops(t){ // from a track record; the single `loop` older versions saved becomes the one saved section
+  let L=t&&t.loops;
+  if(!L&&t&&t.loop)L={items:[{id:"l1",name:"Loop 1",a:t.loop.a,b:t.loop.b}],sel:"l1",on:!!t.loop.on};
+  loops=L?L.items.map(x=>({...x})):[];
+  sel=L&&loops.some(x=>x.id===L.sel)?L.sel:null;
+  const it=loops.find(x=>x.id===sel);
+  loop=it?{a:it.a,b:it.b,on:!!L.on}:{a:null,b:null,on:false};
+}
+const selLoop=()=>loops.find(x=>x.id===sel);
+function syncSel(){const it=selLoop();if(it&&loop.a!==null){it.a=loop.a;it.b=loop.b}}
 function updateLoopUi(){
-  $("#loopsec").classList.toggle("on",loop.on);$("#repeat").classList.toggle("on",repeat);
-  $("#looptxt").textContent=loop.a===null?"":loop.on?fmt(loop.a)+" – "+fmt(loop.b)+" · drag the handles":"saved "+fmt(loop.a)+" – "+fmt(loop.b);
+  $("#repeat").classList.toggle("on",repeat);
+  $("#loopchips").innerHTML=loops.map((x,i)=>`<button class="skip${x.id===sel?loop.on?" on":" sel":""}" data-lid="${esc(x.id)}"><i style="background:${loopColor(i)}"></i>${esc(x.name)}</button>`).join("")+'<button class="skip" data-lid="+">＋ Loop</button>';
+  const it=selLoop();$("#loopinfo").hidden=!it;
+  if(it)$("#looptxt").textContent=fmt(loop.a)+" – "+fmt(loop.b)+(loop.on?" · drag the handles":"");
 }
 function saveLoop(){
-  if(loop.a===null||!cur)return;
-  const body={a:loop.a,b:loop.b,on:loop.on},t=tracks.find(t=>t.id===cur);
-  if(t)t.loop=body;
-  fetch("/api/tracks/"+cur+"/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(()=>{});
+  if(!cur)return;
+  syncSel();
+  const body={loops,sel,on:loop.on&&!!selLoop()},t=tracks.find(t=>t.id===cur);
+  if(t)t.loops={items:loops.map(x=>({...x})),sel,on:body.on};
+  fetch("/api/tracks/"+cur+"/loops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(()=>{});
 }
 async function refresh(){
   try{
@@ -683,15 +710,27 @@ $("#zin").onclick=()=>zoomButton(2);
 $("#zout").onclick=()=>zoomButton(0.5);
 $("#zfit").onclick=()=>setView(0,null);
 $("#zloop").onclick=()=>{if(loop.a===null)return;const pad=(loop.b-loop.a)*0.15;setView(loop.a-pad,loop.b-loop.a+2*pad)};
-$("#loopsec").onclick=()=>{
-  const d=audio.duration;if(!cur||!isFinite(d))return;
-  if(loop.on)loop.on=false;
-  else{
-    if(loop.a===null){ // first use: a section starting at the playhead, 10% of the song long
-      const span=Math.min(d,Math.max(4,d*0.1));loop.a=Math.max(0,Math.min(audio.currentTime,d-span));loop.b=loop.a+span;
-    }
-    loop.on=true;snapToLoop();
-  }
+$("#loopchips").onclick=e=>{
+  const b=e.target.closest("[data-lid]"),d=audio.duration;if(!b||!cur||!isFinite(d))return;
+  const id=b.dataset.lid;syncSel();
+  if(id==="+"){ // a new section starting at the playhead, 10% of the song long
+    const span=Math.min(d,Math.max(4,d*0.1)),a=Math.max(0,Math.min(audio.currentTime,d-span));
+    let n=1;while(loops.some(x=>x.name==="Loop "+n))n++;
+    sel="l"+Date.now().toString(36);loops.push({id:sel,name:"Loop "+n,a,b:a+span});
+    loop={a,b:a+span,on:true};snapToLoop();
+  }else if(id===sel)loop.on=!loop.on&&loop.a!==null;
+  else{const it=loops.find(x=>x.id===id);if(!it)return;sel=id;loop={a:it.a,b:it.b,on:true};snapToLoop()}
+  if(loop.on)snapToLoop();
+  updateLoopUi();dirty=true;saveLoop();audio.applyLoop();
+};
+$("#lren").onclick=()=>{
+  const it=selLoop();if(!it)return;
+  const n=prompt("Rename loop",it.name);if(!n||!n.trim())return;
+  it.name=n.trim().slice(0,60);updateLoopUi();dirty=true;saveLoop();
+};
+$("#ldel").onclick=()=>{
+  const it=selLoop();if(!it||!confirm('Delete "'+it.name+'"?'))return;
+  loops=loops.filter(x=>x!==it);sel=null;loop={a:null,b:null,on:false};
   updateLoopUi();dirty=true;saveLoop();audio.applyLoop();
 };
 $("#repeat").onclick=()=>{

@@ -149,19 +149,29 @@ def rename(track_id: str, body: dict) -> dict:
     return {"ok": True}
 
 
-@app.post("/api/tracks/{track_id}/loop")
-def set_loop(track_id: str, body: dict) -> dict:
-    """Remember the practice loop (seconds a..b, and whether it is switched on) for a track."""
+@app.post("/api/tracks/{track_id}/loops")
+def set_loops(track_id: str, body: dict) -> dict:
+    """Remember the practice loops of a track: a list of named sections (seconds a..b), which one is selected, and
+    whether looping is switched on. The page sends the whole list each time."""
     meta = known(track_id)
     if meta["status"] in ("separating", "mixing"):
         raise HTTPException(409, "still processing")
-    try:
-        a, b, on = float(body["a"]), float(body["b"]), bool(body.get("on", True))
-    except (KeyError, TypeError, ValueError):
-        raise HTTPException(422, "need numeric a and b")
-    if not 0 <= a < b < 86400:
-        raise HTTPException(422, "need 0 <= a < b")
-    worker.update_meta(track_id, loop={"a": round(a, 2), "b": round(b, 2), "on": on})
+    raw = body.get("loops")
+    if not isinstance(raw, list) or len(raw) > 50:
+        raise HTTPException(422, "need a list of at most 50 loops")
+    items, seen = [], set()
+    for x in raw:
+        try:
+            lid, name, a, b = str(x["id"]), str(x.get("name", "")).strip()[:60], float(x["a"]), float(x["b"])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise HTTPException(422, "each loop needs id, a and b")
+        if not 0 < len(lid) <= 20 or lid in seen or not 0 <= a < b < 86400:
+            raise HTTPException(422, "bad or repeated id, or need 0 <= a < b")
+        seen.add(lid)
+        items.append({"id": lid, "name": name or "Loop", "a": round(a, 2), "b": round(b, 2)})
+    sel = body.get("sel")
+    sel = sel if sel in seen else None
+    worker.update_meta(track_id, loops={"items": items, "sel": sel, "on": bool(body.get("on")) and sel is not None})
     return {"ok": True}
 
 
