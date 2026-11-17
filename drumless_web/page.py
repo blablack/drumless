@@ -98,7 +98,8 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
   <label>start <input id="cstart" type="number" min="0" step="10"> ms</label><button id="cstartnow" title="Use the playhead">⌖</button>
   <label>end <input id="cend" type="number" min="0" step="10"> ms</label><button id="cendnow" title="Use the playhead">⌖</button>
   <label><input id="cbpm" type="number" min="20" max="400" step="0.1"> BPM</label>
-  <label><input id="cbeats" type="number" min="1" max="10000" step="1"> beats</label></div>
+  <label><input id="cbeats" type="number" min="1" max="10000" step="1"> beats</label>
+  <label title="Beats of click before the music when you press play (0: none)">count-in <input id="ccount" type="number" min="0" max="16" step="1"> beats</label></div>
  <div class="rates" id="rates"><span>SPEED</span><button data-rate="50">50</button><button data-rate="60">60</button><button data-rate="70">70</button><button data-rate="80">80</button><button data-rate="90">90</button><button data-rate="100">100</button></div>
  <details id="dl"><summary>Download</summary><div class="links" id="plinks"></div></details>
 </div>
@@ -124,8 +125,8 @@ try{rate=+localStorage.getItem("rate")||1;repeat=localStorage.getItem("repeat")=
 const audio=(()=>{
   const FADE=0.005,LEAD=0.05;
   let ctx=null,buf=null,node=null,nodeBuf=null,nodeGain=null,kind=null,src=null,srcGain=null;
-  let playing=false,aOut=Infinity,aPos=0,gen=0,loadGen=0,loopTimer=0,seekTimer=0,seekAt=0,prepP=Promise.resolve();
-  const A={onplay:null,onpause:null,onended:null,onloadedmetadata:null,onanchor:null};
+  let playing=false,aOut=Infinity,aPos=0,preT=Infinity,prePos=0,gen=0,loadGen=0,loopTimer=0,seekTimer=0,seekAt=0,prepP=Promise.resolve();
+  const A={onplay:null,onpause:null,onended:null,onloadedmetadata:null,onanchor:null,preroll:null};
   const context=()=>ctx||(ctx=new (window.AudioContext||window.webkitAudioContext)());
   const region=()=>loop.on&&loop.a!==null?[loop.a,loop.b]:repeat&&buf?[0,buf.duration]:null;
   function posAt(tc){ // the song position at context time tc
@@ -137,6 +138,10 @@ const audio=(()=>{
   }
   A.segments=(from,to)=>{ // [{t, p0, p1}]: from context time t the song plays from p0 to p1 (a loop gives several)
     const out=[];if(!playing||!buf||aOut===Infinity)return out;
+    if(preT<aOut&&from<aOut){ // count-in: the click runs ahead of the music, which enters at aOut (the song position goes below 0 if the grid says so)
+      const t0=Math.max(from,preT),t1=Math.min(to,aOut);
+      if(t1>t0)out.push({t:t0,p0:prePos+(t0-preT)*rate,p1:prePos+(t1-preT)*rate,pre:true});
+    }
     const r=region();let t=Math.max(from,aOut),p=aPos+(t-aOut)*rate;
     if(r&&aPos<r[1]&&p>=r[1])p=r[0]+(p-r[0])%(r[1]-r[0]);
     while(t<to){
@@ -173,7 +178,7 @@ const audio=(()=>{
       node.schedule({output:at+FADE,active:false});
     }
   }
-  async function restart(p){ // (re)start the sound at position p (default: where it is now) with the present settings
+  async function restart(p,countIn){ // (re)start the sound at position p (default: where it is now) with the present settings; countIn: lead in with the click
     const my=++gen,next=rate===1?"native":"stretch";
     try{await prepare(next==="stretch")}
     catch(e){if(my===gen){$("#msg").textContent="Playback failed: "+(e.message||e);A.pause()}return}
@@ -182,20 +187,22 @@ const audio=(()=>{
     let q=p===undefined?posAt(tc):p;
     const r=region();if(loop.on&&r&&(q<r[0]||q>=r[1]))q=r[0]; // a section that is on starts inside it
     q=Math.max(0,Math.min(q,buf.duration-0.001));
+    let ts=tc,pp=Infinity; // ts: when the music enters
+    if(countIn&&A.preroll){const p0=A.preroll(q);if(p0!==null&&p0<q){pp=p0;ts=tc+(q-p0)/rate}}
     if(kind&&kind!==next)stopKind(kind,tc);
     if(next==="native"){
       if(kind==="native")stopKind("native",tc);
       const s=c.createBufferSource(),g=c.createGain();s.buffer=buf;
       if(r){s.loop=true;s.loopStart=r[0];s.loopEnd=r[1]}
-      g.gain.setValueAtTime(0,tc);g.gain.linearRampToValueAtTime(1,tc+FADE);
-      s.connect(g).connect(c.destination);s.start(tc,q);src=s;srcGain=g;
+      g.gain.setValueAtTime(0,ts);g.gain.linearRampToValueAtTime(1,ts+FADE);
+      s.connect(g).connect(c.destination);s.start(ts,q);src=s;srcGain=g;
     }else{
       const g=nodeGain.gain;g.cancelScheduledValues(tc-FADE);
       if(kind==="stretch"){g.setValueAtTime(1,tc-FADE);g.linearRampToValueAtTime(0,tc)}
-      g.setValueAtTime(0,tc);g.linearRampToValueAtTime(1,tc+FADE);
-      node.schedule({output:tc,active:true,input:q,rate,semitones:0,loopStart:r?r[0]:0,loopEnd:r?r[1]:0});
+      g.setValueAtTime(0,ts);g.linearRampToValueAtTime(1,ts+FADE);
+      node.schedule({output:ts,active:true,input:q,rate,semitones:0,loopStart:r?r[0]:0,loopEnd:r?r[1]:0});
     }
-    kind=next;aPos=q;aOut=tc;dirty=true;
+    kind=next;aPos=q;aOut=ts;preT=tc;prePos=pp;dirty=true;
     if(A.onanchor)A.onanchor(tc);
   }
   function finish(){ // ran off the end
@@ -223,7 +230,7 @@ const audio=(()=>{
     if(aPos>=buf.duration-0.01)aPos=0;
     playing=true;aOut=Infinity;dirty=true;
     if(A.onplay)A.onplay();
-    await restart(aPos);
+    await restart(aPos,true);
   };
   A.pause=()=>{
     if(!playing)return;
@@ -421,12 +428,12 @@ audio.onloadedmetadata=()=>{
 // Click: a metronome you set by hand where the drums are missing (e.g. a drums-only intro). A grid is start, BPM and
 // number of beats (end = the last beat); you give any three of start/end/BPM/beats (`mode` says which) and the fourth is worked out.
 // Saved per song.
-const CLICK_DEFAULT={start:0,bpm:120,beats:32,mode:"start",on:false};
+const CLICK_DEFAULT={start:0,bpm:120,beats:32,mode:"start",on:false,countin:0};
 let click={...CLICK_DEFAULT},clickEnd=0,clickLast=0,clickNodes=[];
 const gapMs=()=>60000/click.bpm;
 function loadClick(){
   const c=(tracks.find(t=>t.id===cur)||{}).click;
-  click=c?{start:c.start,bpm:c.bpm,beats:c.beats,mode:c.mode||"start",on:!!c.on}:{...CLICK_DEFAULT};
+  click=c?{start:c.start,bpm:c.bpm,beats:c.beats,mode:c.mode||"start",on:!!c.on,countin:c.countin||0}:{...CLICK_DEFAULT};
   updateClickUi();
 }
 function updateClickUi(){
@@ -434,7 +441,7 @@ function updateClickUi(){
   dirty=true;$("#click").classList.toggle("on",click.on);$("#clickset").hidden=!click.on;
   $("#cmode").value=click.mode;
   $("#cstart").value=Math.round(click.start);$("#cend").value=Math.round(clickEnd);
-  $("#cbpm").value=+click.bpm.toFixed(2);$("#cbeats").value=click.beats;
+  $("#cbpm").value=+click.bpm.toFixed(2);$("#cbeats").value=click.beats;$("#ccount").value=click.countin;
   // the one that is worked out can't be typed into
   $("#cstart").disabled=$("#cstartnow").disabled=click.mode==="end";
   $("#cend").disabled=$("#cendnow").disabled=click.mode==="start";
@@ -446,14 +453,15 @@ function saveClick(){
   fetch("/api/tracks/"+cur+"/click",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(click)}).catch(()=>{});
 }
 function readClick(){
-  const m=$("#cmode").value,s=+$("#cstart").value,e=+$("#cend").value,b=+$("#cbpm").value,n=Math.round(+$("#cbeats").value);
+  const m=$("#cmode").value,s=+$("#cstart").value,e=+$("#cend").value,b=+$("#cbpm").value,n=Math.round(+$("#cbeats").value),cn=Math.round(+$("#ccount").value);
   let c=null;
+  if(!(cn>=0&&cn<=16))cn=click.countin;
   if(n>=1&&n<=10000){
     if(m==="start"&&s>=0&&b>=20&&b<=400)c={start:s,bpm:b,beats:n};
     else if(m==="end"&&b>=20&&b<=400&&e-(n-1)*60000/b>=0)c={start:e-(n-1)*60000/b,bpm:b,beats:n};
     else if(m==="span"&&n>=2&&s>=0&&e>s&&(n-1)*60000/(e-s)>=20&&(n-1)*60000/(e-s)<=400)c={start:s,bpm:(n-1)*60000/(e-s),beats:n};
   }
-  if(c){click={...c,start:Math.round(c.start),bpm:+c.bpm.toFixed(4),mode:m,on:click.on};saveClick()}
+  if(c){click={...c,start:Math.round(c.start),bpm:+c.bpm.toFixed(4),mode:m,on:click.on,countin:cn};saveClick()}
   updateClickUi(); // an invalid entry puts the saved values back
 }
 // The click is scheduled on the engine's clock: for the stretch of song about to sound (the loop's passes included),
@@ -461,6 +469,13 @@ function readClick(){
 const CLICK_LOOK=0.15;
 audio.onanchor=tc=>{ // the sound was repositioned: forget the clicks scheduled after it, start over from here
   clickLast=tc;clickNodes=clickNodes.filter(n=>{if(n.when<=tc)return true;try{n.g.disconnect()}catch(e){}return false});
+};
+// Count-in: the N grid beats before the position playback starts from (the grid carries on backwards past its start,
+// and past 0:00: the click then plays alone). The beat that falls on the start itself is the music's own.
+audio.preroll=q=>{
+  if(!click.on||!click.countin)return null;
+  const gap=60/click.bpm,s0=click.start/1000,m=Math.ceil((q-s0)/gap-1e-9);
+  return m>click.beats?null:s0+(m-click.countin)*gap; // not once the grid has ended
 };
 function tick(){
   if(!click.on||audio.paused)return;
@@ -470,7 +485,7 @@ function tick(){
   clickLast=to;
   const gap=60/click.bpm,s0=click.start/1000;
   for(const sg of audio.segments(from,to)){
-    for(let i=Math.max(0,Math.ceil((sg.p0-s0)/gap-1e-9));i<click.beats;i++){
+    for(let i=Math.max(sg.pre?-Infinity:0,Math.ceil((sg.p0-s0)/gap-1e-9));i<click.beats;i++){ // a count-in runs on the grid extended backwards
       const sp=s0+i*gap;if(sp>=sg.p1)break;
       const when=sg.t+(sp-sg.p0)/rate;
       const o=c.createOscillator(),g=c.createGain();o.frequency.value=1500;
@@ -485,7 +500,7 @@ $("#click").onclick=()=>{
   if(click.on)audio.context().resume();
   updateClickUi();saveClick();
 };
-["#cmode","#cstart","#cend","#cbpm","#cbeats"].forEach(k=>$(k).onchange=readClick);
+["#cmode","#cstart","#cend","#cbpm","#cbeats","#ccount"].forEach(k=>$(k).onchange=readClick);
 $("#cstartnow").onclick=()=>{$("#cstart").value=Math.round(audio.currentTime*1000);readClick()};
 $("#cendnow").onclick=()=>{$("#cend").value=Math.round(audio.currentTime*1000);readClick()};
 function snapToLoop(){ // with the section on, playback starts inside it
