@@ -35,3 +35,11 @@ Needs `ffmpeg` on the PATH. The first track downloads the model into `$DRUMLESS_
 It ships as a container: build it with the `Dockerfile` (port 8000) and mount a volume at `/data` for tracks and models. CPU only:
 separating a 4-minute song takes about half an hour and ~5 GiB of RAM with the default model, which scores about 14 dB drums SDR
 (vs ~11 for htdemucs_ft) for ~1.7x the CPU time. Quality over speed: bleed in the drumless track is what you hear when playing along.
+
+## License
+
+Drumless is free software under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-or-later): if you run a modified
+version for other people, including as a hosted service, you must offer them the source of your changes.
+
+The separation models that audio-separator downloads are not part of this repository and carry their own licenses (some are
+non-commercial): check the ones you use.
