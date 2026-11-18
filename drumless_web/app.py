@@ -1,6 +1,7 @@
 """Upload a song, get it back without the drums. Run: uvicorn drumless_web.app:app"""
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -45,6 +46,37 @@ def vendor(name: str) -> FileResponse:
     if name != "SignalsmithStretch.js":
         raise HTTPException(404)
     return FileResponse(VENDOR / name, media_type="text/javascript")
+
+
+STATIC = Path(__file__).parent / "static"
+ICONS = ("icon-192.png", "icon-512.png")
+# Lets a phone install the page as an app (home screen / app list icon, opens without the browser's bars).
+MANIFEST = {
+    "name": "Drumless",
+    "short_name": "Drumless",
+    "description": "Songs without the drums, to practise along to.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#f5f5f5",
+    "theme_color": "#3367d6",
+    "icons": [
+        {"src": f"/{name}", "sizes": f"{size}x{size}", "type": "image/png", "purpose": "any maskable"}
+        for name, size in zip(ICONS, (192, 512))
+    ],
+}
+
+
+@app.get("/manifest.webmanifest")
+def manifest() -> Response:
+    return Response(json.dumps(MANIFEST), media_type="application/manifest+json")
+
+
+@app.get("/{name}.png")
+def icon(name: str) -> FileResponse:
+    if f"{name}.png" not in ICONS:
+        raise HTTPException(404)
+    return FileResponse(STATIC / f"{name}.png", media_type="image/png")
 
 
 @app.get("/health")
