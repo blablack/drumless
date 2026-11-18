@@ -570,7 +570,22 @@ audio.onplay=audio.onpause=audio.onended=()=>{
   const p=!audio.paused;
   document.body.classList.toggle("playing",p);
   $("#play").textContent=p?"❚❚":"▶";$("#play").setAttribute("aria-label",p?"Pause":"Play");
+  keepAwake(p);
 };
+// Keep the screen on while playing: a phone that locks itself stops the sound. Only offered over HTTPS; the browser
+// drops the lock when the page is hidden, so it is asked for again when the page comes back while still playing.
+let wakeLock=null,wakeWant=false;
+async function keepAwake(on){
+  wakeWant=on;
+  try{
+    if(on&&!wakeLock&&navigator.wakeLock&&document.visibilityState==="visible"){
+      const l=await navigator.wakeLock.request("screen");
+      if(!wakeWant||wakeLock){l.release();return} // paused meanwhile, or a second request won
+      wakeLock=l;l.onrelease=()=>{if(wakeLock===l)wakeLock=null};
+    }else if(!on&&wakeLock){const l=wakeLock;wakeLock=null;await l.release()}
+  }catch(e){}
+}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&!audio.paused)keepAwake(true)});
 async function refreshLog(){
   try{
     const d=await (await fetch("/api/log")).json();
