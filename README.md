@@ -24,7 +24,7 @@ Needs `ffmpeg` on the PATH. The first track downloads the model into `$DRUMLESS_
 
 - `drumless_web/vendor/`: the bundled Signalsmith Stretch build (MIT, see its README). The page plays through WebAudio: the stem is decoded
   in the browser, played natively at 100% and through the stretcher below that, so the loop is gapless and the click shares the music's clock.
-- `drumless_web/app.py`: the FastAPI app (upload, list, download, rename, cancel, delete, loops, click, peaks), plus a web app manifest and icon (`drumless_web/static/`) so a phone can install the page as an app.
+- `drumless_web/app.py`: the FastAPI app, with two addresses for one page: `/` is the song list and `/song/<id>` the player (so the browser's Back button goes from a song to the list) (upload, list, download, rename, cancel, delete, loops, click, peaks), plus a web app manifest and icon (`drumless_web/static/`) so a phone can install the page as an app.
 - `drumless_web/worker.py`: storage and the single separation worker. There is no database: each `tracks/<id>/` directory is the
   whole state (`meta.json`, the original, `no_drums.flac`, `drums.flac`, cached `peaks_*.bin`), so a restart just queues unfinished tracks again.
 - `drumless_web/page.py`: the whole UI, one inline HTML page.

@@ -13,6 +13,9 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 #drop{border:2px dashed var(--line);text-align:center;padding:28px 12px;cursor:pointer}
 #drop.over{border-color:var(--accent)}
 #drop small{display:block;color:var(--mute);margin-top:4px}
+#back{display:none;padding:8px 0 12px;font-weight:600}
+body.song #back{display:inline-block}
+body.song h1,body.song .sub,body.song #drop,body.song #list,body.song #logbar{display:none}
 .acts{display:flex;gap:12px;align-items:center}
 .row{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .st{font-size:.8rem;color:var(--mute)}.st.done{color:var(--ok)}.st.error{color:var(--err)}
@@ -50,6 +53,7 @@ h1{font-size:1.4rem;margin:8px 0 2px}.sub{color:var(--mute);margin:0 0 16px}
 #play{flex:none;width:68px;height:68px;aspect-ratio:1;border-radius:50%;background:var(--accent);color:#fff;font-size:1.5rem}
 .skip{color:var(--text);border:1px solid var(--line)!important;border-radius:20px;padding:8px 14px}
 .loop{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:14px;font-size:.85rem;color:var(--mute);font-variant-numeric:tabular-nums}
+.loop[hidden]{display:none}
 .loop input,.loop select{background:transparent;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
 .loop select{background:var(--card)}
 .loop input{width:5.5em}.loop input:disabled{opacity:.55}
@@ -99,6 +103,7 @@ a:hover,button:hover{text-decoration:underline}
 #loghandle::after{content:"";width:40px;height:4px;border-radius:2px;background:var(--line)}
 #loghandle:hover::after,#loghandle.drag::after{background:var(--mute)}
 </style></head><body><main>
+<a id="back" href="/">‹ Songs</a>
 <h1>Drumless</h1><p class="sub">Upload a song, get it back without the drums. <span id="model"></span></p>
 <div class="card" id="drop"><input id="file" type="file" accept="audio/*,.flac,.m4a,.opus" multiple hidden>
 Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 MB each</small></div>
@@ -145,6 +150,9 @@ Drop songs here or click to choose<small>mp3, wav, flac, m4a, ogg … up to 500 
 <div id="logbar" hidden><div id="loghandle" title="Drag to resize"></div><div class="row"><span id="logname"></span><button id="logtoggle">Hide log</button></div><pre id="log"></pre></div>
 <script src="/vendor/SignalsmithStretch.js"></script>
 <script>
+// Two pages from one file: "/" is the song list, "/song/<id>" the player for that song.
+const SONG=(location.pathname.match(/^\/song\/([\w-]+)\/?$/)||[])[1]||null;
+if(SONG)document.body.classList.add("song");
 const $=s=>document.querySelector(s), esc=s=>s.replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";");
 const LABEL={queued:"Queued",separating:"Separating…",mixing:"Mixing…",done:"Done",error:"Failed",cancelled:"Cancelled"};
 function elapsed(t){const s=Math.max(0,Math.round(Date.now()/1000-t));return Math.floor(s/60)+"m "+String(s%60).padStart(2,"0")+"s"}
@@ -333,7 +341,8 @@ function select(id){
 }
 function syncPlayer(){
   const t=tracks.find(t=>t.id===cur);
-  if(!t){if(cur){cur=null;audio.unload()}$("#player").hidden=true;return}
+  if(!t){if(cur){cur=null;audio.unload();if(SONG)location.replace("/")}$("#player").hidden=true;return} // deleted elsewhere
+  if(SONG)document.title=t.name+" · Drumless";
   $("#pname").textContent=t.name;$("#pdisc").style.setProperty("--h",hue(t.name));
 }
 const dur=()=>isFinite(audio.duration)?audio.duration:(peaks?peaks.length/PPS:0);
@@ -473,6 +482,12 @@ async function refresh(){
     const d=await (await fetch("/api/tracks")).json();
     $("#model").textContent="Model: "+d.model.replace(/\.(yaml|ckpt)$/,"");
     tracks=d.tracks;
+    if(SONG&&!cur){ // the song's own page: open it once it is there and done
+      const t=tracks.find(t=>t.id===SONG);
+      if(!t)$("#msg").textContent="This song no longer exists.";
+      else if(t.status==="done"){$("#msg").textContent="";select(SONG)}
+      else $("#msg").textContent=t.name+": "+(t.status==="error"?"failed"+(t.error?" ("+t.error+")":""):(LABEL[t.status]||t.status));
+    }
     const sig=JSON.stringify([cur,d.tracks.map(t=>[t.id,t.name,t.status,t.position])]);
     if(sig!==refresh.sig||d.tracks.some(t=>t.status==="separating"||t.status==="mixing")){
       $("#list").innerHTML=d.tracks.map(tile).join("")||'<p class="sub">No tracks yet.</p>';refresh.sig=sig;
@@ -643,7 +658,9 @@ drop.ondragleave=()=>drop.classList.remove("over");
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");upload([...e.dataTransfer.files])};
 async function del(id){
   if(!confirm("Delete this track and its files?"))return;
-  await fetch("/api/tracks/"+id,{method:"DELETE"});refresh.sig=null;refresh();
+  await fetch("/api/tracks/"+id,{method:"DELETE"});
+  if(SONG&&id===SONG){location.replace("/");return}
+  refresh.sig=null;refresh();
 }
 $("#list").onclick=async e=>{
   const id=e.target.dataset.del,cid=e.target.dataset.cancel;
@@ -652,7 +669,7 @@ $("#list").onclick=async e=>{
   const bad=e.target.closest(".bad");
   if(bad){$("#msg").textContent=bad.querySelector(".tname").textContent+": "+(bad.dataset.err||"failed");return}
   const row=e.target.closest(".pick");
-  if(row&&row.dataset.id!==cur){select(row.dataset.id);refresh.sig=null;refresh()}
+  if(row)location.href="/song/"+row.dataset.id;
 };
 $("#pdel").onclick=()=>{closeSheets();del(cur)};
 $("#pren").onclick=async()=>{

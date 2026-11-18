@@ -89,6 +89,14 @@ def index() -> str:
     return PAGE
 
 
+@app.get("/song/{track_id}", response_class=HTMLResponse)
+def song_page(track_id: str) -> str:
+    """The same page: it shows the player for this song when the address says so."""
+    if not ID.match(track_id):
+        raise HTTPException(404)
+    return PAGE
+
+
 @app.get("/api/tracks")
 def tracks() -> dict:
     items = worker.list_tracks()
