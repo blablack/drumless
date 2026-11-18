@@ -89,6 +89,8 @@ body.song h1,body.song .sub,body.song #drop,body.song #list,body.song #logbar{di
 @keyframes spin{to{transform:rotate(360deg)}}
 body.playing #pdisc{animation:spin 4s linear infinite}
 #player{border:2px solid var(--accent)}
+body.song #player{border:0;background:none;box-shadow:none;border-radius:0;padding:0;margin:0}
+body.song #wave{height:clamp(150px,30vh,300px)}
 a,button{color:var(--accent);background:none;border:0;font:inherit;cursor:pointer;padding:0;text-decoration:none}
 a:hover,button:hover{text-decoration:underline}
 .links{display:flex;gap:14px;margin-top:8px;flex-wrap:wrap;font-size:.9rem}
